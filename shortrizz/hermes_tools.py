@@ -81,17 +81,35 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+def _job_python() -> str:
+    """Interpreter for the job process: the venv that holds faster-whisper (the plugin env), else ours.
+
+    Hermes may run plugins in its core interpreter with the plugin venv added to sys.path, so
+    sys.executable alone would not see the plugin's dependencies.
+    """
+    import importlib.util
+    spec = importlib.util.find_spec("faster_whisper")
+    if spec and spec.origin:
+        site = Path(spec.origin).resolve().parents[1]            # .../lib/pythonX.Y/site-packages
+        for cand in (site.parents[2] / "bin" / "python", site.parents[2] / "bin" / "python3"):
+            if cand.exists():
+                return str(cand)
+    return sys.executable
+
+
 def _start_job(kind: str, argv: list[str], out_dir: Path) -> dict:
     job_id = f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     out_dir.mkdir(parents=True, exist_ok=True)
     log = out_dir / "job.log"
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(PKG_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
-               PYTHONUNBUFFERED="1")
+    paths = [str(PKG_ROOT)] + [p for p in sys.path if p and Path(p).is_dir()]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(dict.fromkeys(paths)), PYTHONUNBUFFERED="1")
+    env.pop("PYTHONHOME", None)
+    py = _job_python()
     with open(log, "wb") as fh:
-        proc = subprocess.Popen([sys.executable, "-m", "shortrizz", *argv], stdout=fh, stderr=subprocess.STDOUT,
+        proc = subprocess.Popen([py, "-m", "shortrizz", *argv], stdout=fh, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, cwd=str(out_dir), env=env, start_new_session=True)
     job = {"job_id": job_id, "kind": kind, "pid": proc.pid, "out_dir": str(out_dir), "log": str(log),
-           "started": time.time(), "argv": argv}
+           "started": time.time(), "argv": argv, "python": py}
     (_jobs_dir() / f"{job_id}.json").write_text(json.dumps(job))
     return job
 
