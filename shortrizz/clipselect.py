@@ -121,6 +121,7 @@ HOOK = re.compile(r"\b(you|your|secret|never|always|most|biggest|mistake|why|how
 def heuristic_candidates(tr, n, mn, mx):
     words = all_words(tr)
     out = []
+    from .transcribe import is_looping
     for i0 in sentence_starts(words):
         sn = snap(words, words[i0]["s"], words[i0]["s"] + (mn + mx) / 2, mn, mx)
         if not sn:
@@ -128,6 +129,8 @@ def heuristic_candidates(tr, n, mn, mx):
         a, b = sn
         seg = words[a:b+1]
         text = " ".join(w["w"] for w in seg)
+        if is_looping(text):
+            continue
         first = " ".join(w["w"] for w in seg[:12])
         dur = seg[-1]["e"] - seg[0]["s"]
         wps = len(seg) / max(dur, 1)
@@ -143,6 +146,15 @@ def heuristic_candidates(tr, n, mn, mx):
         for c in out:
             c["virality_score"] = int(40 + 50 * c["raw"] / hi)
     return out
+
+def sane_clip(seg_words, title=""):
+    """Reject clips whose speech or title is a repetition loop or too sparse to caption."""
+    from .transcribe import is_looping
+    text = " ".join(w["w"] for w in seg_words)
+    dur = seg_words[-1]["e"] - seg_words[0]["s"] if seg_words else 0
+    if len(seg_words) < max(20, dur * 0.8):  # < ~50 wpm: barely any speech
+        return False
+    return not is_looping(text) and not (title and is_looping(title + " " + title))
 
 def clean_tags(tags, limit=8):
     """'#tag' form, no spaces, de-duplicated case-insensitively, at most `limit`."""
@@ -181,6 +193,9 @@ def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None):
         s, e = words[a]["s"], words[b]["e"]
         if any(s < p["end"] and e > p["start"] for p in picked):
             continue
+        if not sane_clip(words[a:b + 1], c.get("title", "")):
+            log(f"  skipping degenerate candidate {c.get('title', '')[:40]!r}")
+            continue
         tags = clean_tags(c.get("hashtags", []))
         picked.append({"start": round(max(0, s - 0.08), 2), "end": round(e + 0.25, 2),
                        "title": c.get("title", "Clip").strip(), "virality_score": int(c.get("virality_score", 50)),
@@ -196,6 +211,8 @@ def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None):
             if any(c["start"] < p["end"] and c["end"] > p["start"] for p in picked):
                 continue
             sn = snap(words, c["start"], c["end"], mn, mx); a, b = sn
+            if not sane_clip(words[a:b + 1], c["title"]):
+                continue
             picked.append({**{k: c[k] for k in ("title", "virality_score", "why_it_hooks", "caption", "hashtags")},
                            "start": round(max(0, words[a]["s"] - 0.08), 2), "end": round(words[b]["e"] + 0.25, 2),
                            "word_range": [a, b], "method": "heuristic"})

@@ -6,6 +6,10 @@ from . import download, transcribe as T, clipselect, captions, render, gallery, 
 
 DEFAULT_CACHE = "~/.cache/shortrizz"
 
+def _tr_hash(tr):
+    import hashlib
+    return hashlib.sha1(" ".join(s["text"] for s in tr["segments"]).encode()).hexdigest()[:8]
+
 def slug(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:40] or "clip"
 
@@ -71,7 +75,7 @@ def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DE
     mx = min(max_len, total); mn = min(min_len, mx)
     prog("select")
     clips = clipselect.select(tr, count, mn, mx, meta.get("title", ""), use_llm=use_llm,
-                              cache_file=None if fresh else cache / f"{Path(src).stem}.picks.{count}-{mn:g}-{mx:g}.json")
+                              cache_file=None if fresh else cache / f"{Path(src).stem}.picks.{count}-{mn:g}-{mx:g}.{_tr_hash(tr)}.json")
     timings["select"] = time.time() - t0 - sum(timings.values())
     log(f"selected {len(clips)} clip(s)")
     results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm)
