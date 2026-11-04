@@ -101,3 +101,10 @@ def test_length_tight_preset(monkeypatch):
                         "words": words}]}
     clips = clipselect.select(tr, 3, 20, 35, use_llm=False)
     assert clips and all(20 - 0.5 <= c["end"] - c["start"] <= 35 + 0.5 for c in clips)
+
+def test_caption_prefers_forehead_over_mouth_on_closeups():
+    st = captions.load_style("hormozi")
+    base = min(int(1920 * st["pos_y"]), int(captions.SAFE_BOTTOM_Y - st["size"] * 0.6))
+    face = (248, 386, 842, 1178)                                    # real close-up from the S79 demo
+    y = E.caption_y_fn([(0.0, [face]), (0.5, [face])], base, st["size"])(0.0, 0.5)
+    assert y < face[1] + 0.25 * (face[3] - face[1])                 # above the eyes, not on the mouth

@@ -530,7 +530,14 @@ def caption_y_fn(track, base_y, size, hook_until=0.0):
     half = size * 0.62
     lo_lim = SAFE["bottom_y"] - half            # lowest allowed centre
     def overlap(y, boxes):
-        return sum(max(0.0, min(y + half, b[3] + 10) - max(y - half, b[1] - 10)) for b in boxes)
+        """Weighted overlap: eyes-to-chin counts fully, forehead/hair only 30%."""
+        tot = 0.0
+        for b in boxes:
+            h = b[3] - b[1]
+            bands = ((b[1] - 0.35 * h, b[1] + 0.25 * h, 0.3), (b[1] + 0.25 * h, b[3] + 10, 1.0))
+            for y0, y1, wt in bands:
+                tot += wt * max(0.0, min(y + half, y1) - max(y - half, y0))
+        return tot
     def y_at(t0, t1):
         boxes = [b for b in _faces_between(track, t0, t1) if (b[2] - b[0]) > 90]
         if not boxes or overlap(base_y, boxes) == 0:
