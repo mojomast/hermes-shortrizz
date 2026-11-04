@@ -37,7 +37,8 @@ def render_clip(src, start, end, ass_path, out_path, reframe_mode="auto", crf=20
     enc.stdin.close()
     if enc.wait() != 0:
         raise RuntimeError(f"ffmpeg encode failed for {out_path}")
-    return {"frames": n, "watermark": wm is not None, "reframe": "letterbox" if plan is None else ("center" if len(plan[0]) == 1 else "face")}
+    audio = check_audio(out_path)
+    return {"audio_lufs": audio, "frames": n, "watermark": wm is not None, "reframe": "letterbox" if plan is None else ("center" if len(plan[0]) == 1 else "face")}
 
 def thumbnail(mp4, out_jpg, t=1.0):
     run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t}", "-i", str(mp4), "-frames:v", "1", "-vf", "scale=360:-2",
@@ -131,29 +132,30 @@ def _audio_graph(items, xfade, sfx, loop, si=0, base=0.0):
     """items: [{kind:src,s,e}|{kind:hold,dur,wav}] -> (extra inputs, filter_complex, out label)."""
     inputs, chains, labels = [], [], []
     d = xfade / 1000.0
+    nsrc = [k for k, it in enumerate(items) if it["kind"] == "src"]
+    srcin = {k: si + j for j, k in enumerate(nsrc)}   # one input per kept segment (see render_edit)
+    off = si + max(1, len(nsrc)) - 1                          # extra inputs come after the source copies
     fmt = "aformat=sample_rates=48000:channel_layouts=stereo"
     for k, it in enumerate(items):
         first, last = k == 0, k == len(items) - 1
         if it["kind"] == "src":
             s = it["s"] - (0 if first else d / 2); e = it["e"] + (0 if last else d / 2)
-            chains.append(f"[src{k}]atrim={max(0, s - base):.3f}:{e - base:.3f},asetpts=PTS-STARTPTS,{fmt}[a{k}]")
+            chains.append(f"[{srcin[k]}:a]atrim={max(0, s - base):.3f}:{e - base:.3f},asetpts=PTS-STARTPTS,{fmt}[a{k}]")
         else:
             dur = it["dur"] + (0 if first or last else d)
             if it.get("wav"):
-                inputs.append(it["wav"]); n = len(inputs) + si
+                inputs.append(it["wav"]); n = len(inputs) + off
                 chains.append(f"[{n}:a]{fmt},apad,atrim=0:{dur:.3f},asetpts=PTS-STARTPTS[a{k}]")
             else:
                 chains.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{dur:.3f}[a{k}]")
         labels.append(f"a{k}")
-    nsrc = [k for k, it in enumerate(items) if it["kind"] == "src"]
-    chains.insert(0, f"[{si}:a]asplit={len(nsrc)}" + "".join(f"[src{k}]" for k in nsrc))
     cur = labels[0]
     for k, lab in enumerate(labels[1:], 1):
         chains.append(f"[{cur}][{lab}]acrossfade=d={d:.3f}:c1=qsin:c2=qsin[x{k}]"); cur = f"x{k}"
     if sfx:
         mix = [f"[{cur}]"]
         for j, (t, wav) in enumerate(sfx):
-            inputs.append(wav); n = len(inputs) + si
+            inputs.append(wav); n = len(inputs) + off
             chains.append(f"[{n}:a]{fmt},volume=-20dB,adelay={int(t * 1000)}|{int(t * 1000)}[s{j}]")
             mix.append(f"[s{j}]")
         chains.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0[mx]"); cur = "mx"
@@ -161,6 +163,22 @@ def _audio_graph(items, xfade, sfx, loop, si=0, base=0.0):
         chains.append(f"[{cur}]areverse,afade=t=in:d=0.06,areverse[lp]"); cur = "lp"
     chains.append(f"[{cur}]highpass=f=80[pre]")
     return inputs, chains, "pre"
+
+def check_audio(path, silent_lufs=-50.0):
+    """Final output check: the file must have an audio stream with real sound in it.
+    Raises if the stream is missing or silent; returns the integrated loudness (LUFS)."""
+    import re as _re
+    has = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout.strip()
+    if not has:
+        raise RuntimeError(f"no audio stream in {path}")
+    err = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-map", "0:a:0",
+                          "-af", "ebur128", "-f", "null", "-"], capture_output=True, text=True).stderr
+    m = _re.findall(r"I:\s+(-?[\d.]+) LUFS", err)
+    lufs = float(m[-1]) if m else -70.0
+    if lufs <= silent_lufs:
+        raise RuntimeError(f"silent audio in {path} ({lufs} LUFS)")
+    return lufs
 
 def _measure_loudness(src, inputs, chains, label):
     import re as _re
@@ -295,7 +313,10 @@ def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, refram
     sw, sh, fps, plan = ctx["sw"], ctx["sh"], ctx["fps"], ctx["plan"]
     base = max(0.0, min(it.get("s", clip_start) for it in items) - 1.0)
     span = max(it.get("e", clip_end) for it in items) - base + 1.0
-    sin = ["-ss", f"{base:.3f}", "-t", f"{span:.3f}", "-i", str(src)]
+    # one demuxed copy of the source span per kept segment: an asplit feeding acrossfade goes silent
+    # when a later segment (the cold open) plays before an earlier one
+    nseg = max(1, sum(1 for it in items if it["kind"] == "src"))
+    sin = ["-ss", f"{base:.3f}", "-t", f"{span:.3f}", "-i", str(src)] * nseg
     ag = lambda si: _audio_graph(items, fx.get("xfade_ms", 15), fx.get("sfx") or [], fx.get("loop"), si, base)
     inputs, chains, alab = ag(1)
     if loudnorm:
@@ -354,5 +375,6 @@ def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, refram
     enc.stdin.close()
     if enc.wait() != 0:
         raise RuntimeError(f"ffmpeg encode failed for {out_path}")
-    return {"frames": nfr, "duration": round(nfr / fps, 2), "watermark": wm is not None,
+    audio = check_audio(out_path)
+    return {"audio_lufs": audio, "frames": nfr, "duration": round(nfr / fps, 2), "watermark": wm is not None,
             "reframe": "letterbox" if plan is None else ("center" if len(plan[0]) == 1 else "face")}
