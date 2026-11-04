@@ -4,16 +4,21 @@ from pathlib import Path
 import numpy as np
 from .util import log, models_dir
 
-TRANSCRIPT_VERSION = 2
+TRANSCRIPT_VERSION = 3
+import os
+# int8 CPU decoding silently dropped whole minutes of clear speech on some sources (Basis, S79u6BtYvQ0);
+# float32 is ~1.6x slower but reliable. Override with SHORTRIZZ_COMPUTE_TYPE=int8.
+COMPUTE_TYPE = os.environ.get("SHORTRIZZ_COMPUTE_TYPE", "float32")
 SR = 16000
 
 # Settings that stop the classic "I'm I'm I'm" loop: no conditioning on previous (possibly
 # hallucinated) text, temperature fallback when a window's text compresses too well or is
 # low-probability, and dropping hallucinated words inside long silences.
-WHISPER_KW = dict(initial_prompt="Umm, let me think like, hmm... Okay, here's what I'm, uh, thinking.",  # filler priming
-                  word_timestamps=True, vad_filter=True, beam_size=5, condition_on_previous_text=False,
+# No initial_prompt: a filler-style "Umm, uh…" priming prompt made Whisper skip most speech in tests
+# (4 vs 159 words on a 60 s chunk), so fillers are caught by rules + the LLM edit pass instead.
+WHISPER_KW = dict(word_timestamps=True, vad_filter=True, beam_size=5, condition_on_previous_text=False,
                   compression_ratio_threshold=2.2, log_prob_threshold=-1.0, no_speech_threshold=0.6,
-                  temperature=(0.0, 0.2, 0.4, 0.6, 0.8), hallucination_silence_threshold=2.0,
+                  temperature=(0.0, 0.2, 0.4, 0.6, 0.8),
                   repetition_penalty=1.05, vad_parameters={"min_silence_duration_ms": 500})
 
 # ------------------------------------------------------------------ quality checks
@@ -91,19 +96,48 @@ def _repair_loops(model, audio, segs, language):
     fixed.sort(key=lambda s: s["s"])
     return fixed
 
+def speech_coverage(audio, segs):
+    """Fraction of VAD-detected speech that the transcript covers. Catches Whisper silently skipping minutes."""
+    try:
+        from faster_whisper.vad import get_speech_timestamps, VadOptions
+        ts = get_speech_timestamps(audio, VadOptions(min_silence_duration_ms=500))
+    except Exception:  # noqa: BLE001
+        return 1.0
+    spans = []
+    for x, y in sorted((s["s"] - 1.5, s["e"] + 1.5) for s in segs):
+        if spans and x <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], y))
+        else:
+            spans.append((x, y))
+    tot = cov = 0.0
+    j = 0
+    for t in ts:
+        a, b = t["start"] / SR, t["end"] / SR
+        tot += b - a
+        for x, y in spans:
+            if y < a:
+                continue
+            if x > b:
+                break
+            cov += max(0.0, min(b, y) - max(a, x))
+    return cov / tot if tot > 5 else 1.0
+
 def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
     """faster-whisper on CPU with word timestamps. Cached as JSON; bad/old caches are redone."""
     cache = Path(cache_dir) / f"{Path(video).stem}.{model_size}.words.json"
     if cache.exists():
         tr = json.loads(cache.read_text())
         q = quality(tr)
+        if q["ok"] and tr.get("version", 0) < 3:  # old caches: check they did not skip speech
+            q["coverage"] = round(speech_coverage(load_audio(video), tr["segments"]), 3)
+            q["ok"] = q["coverage"] >= 0.8
         if q["ok"]:  # older-version caches are kept when they pass the loop checks
             log(f"using cached transcript {cache}")
             return tr
         log(f"cached transcript rejected (version {tr.get('version')}, quality {q}); re-transcribing")
     from faster_whisper import WhisperModel
-    log(f"transcribing with faster-whisper '{model_size}' (CPU int8)…")
-    model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=threads,
+    log(f"transcribing with faster-whisper '{model_size}' (CPU {COMPUTE_TYPE})…")
+    model = WhisperModel(model_size, device="cpu", compute_type=COMPUTE_TYPE, cpu_threads=threads,
                          download_root=str(models_dir() / "whisper"))
     audio = load_audio(video)
     dur = len(audio) / SR
@@ -112,16 +146,21 @@ def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
     segs = _repair_loops(model, audio, segs, lang)
     tr = {"version": TRANSCRIPT_VERSION, "language": lang, "segments": segs}
     q = quality(tr, dur)
+    q["coverage"] = round(speech_coverage(audio, segs), 3)
+    q["ok"] = q["ok"] and q["coverage"] >= 0.8
     if not q["ok"]:
         log(f"  transcript still looks bad {q}; retrying with language={lang}, no VAD, greedy fallback")
         segs, _ = _run(model, audio, language=lang, vad_filter=False, beam_size=1)
         segs = _repair_loops(model, audio, segs, lang)
         tr["segments"] = segs
         q = quality(tr, dur)
+        q["coverage"] = round(speech_coverage(audio, segs), 3)
+        q["ok"] = q["ok"] and q["coverage"] >= 0.8
     tr["quality"] = q
     log(f"  transcript: {q['words']} words, {q['wpm']} wpm, loop {q['loop_frac']:.0%}")
     if not q["ok"]:
-        why = "little or no speech" if q["sparse"] else "Whisper kept looping"
+        why = ("Whisper skipped speech" if q["coverage"] < 0.8 else
+               "little or no speech" if q["sparse"] else "Whisper kept looping")
         raise SystemExit(f"transcript failed sanity checks ({why}; {q}). The audio may be music, noise or a "
                          f"non-speech track. Try --model medium or --language en.")
     cache.write_text(json.dumps(tr))

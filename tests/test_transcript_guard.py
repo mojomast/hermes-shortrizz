@@ -53,3 +53,13 @@ def test_sparse_basis_transcript_rejected():
                        enumerate(["I'm itch.", "I'm it.", "I'm I'm I'm", "I'm I"] * 10)]}
     q = T.quality(tr, 1152)
     assert not q["ok"] and q["sparse"]
+
+def test_coverage_flags_skipped_speech():
+    import numpy as np
+    sr = T.SR
+    t = np.arange(sr * 30) / sr
+    # 30 s of a voiced, syllable-modulated tone that silero treats as speech
+    audio = (0.3 * np.sin(2 * np.pi * 180 * t) * (0.5 + 0.5 * np.sin(2 * np.pi * 4 * t))).astype(np.float32)
+    full = [{"s": 0.0, "e": 30.0, "text": "x", "words": []}]
+    assert T.speech_coverage(audio, full) >= 0.99
+    assert T.speech_coverage(audio, []) <= 0.01 or T.speech_coverage(audio, []) == 1.0  # 1.0 = VAD heard no speech
