@@ -1,5 +1,5 @@
 name: shortrizz
-version: "0.2.0"
+version: "0.2.1"
 description: >-
   Skill id shortrizz:shortrizz-clipper. Shortrizz is a self-hosted AI clipper,
   a sibling of Comfyrizz: give it a long video URL or file and it downloads it,

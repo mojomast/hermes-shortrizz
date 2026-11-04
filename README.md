@@ -139,7 +139,7 @@ Every clip goes through an edit pass before it is rendered. These are **on by de
 
   Simple rules catch um/uh and immediate 1–3-word repeats even without the LLM. (Priming Whisper with a filler-style prompt was tested and rejected: it made Whisper skip most of the speech.) The EDL is saved as `NAME.edl.json` and in the cache, so `restyle` re-renders without the LLM. Disable the LLM pass with `--no-llm-edits`.
 - **Hook text.** A 2–6-word on-screen hook shows for the first 0–2.8 s, below the top 288 px. Disable it with `--no-hook-text`.
-- **Face-aware text.** Captions keep their style position unless it would cover a face; then they move below the chin or above the eyes, staying inside the safe zones. The zone is chosen once per shot (with hysteresis), so captions don't jump around on close-ups. The hook text also moves off eyes and mouth. Emoji pops pick a spot clear of faces, captions and the hook, trying smaller sizes and corners before skipping.
+- **Face-aware text.** Captions keep their style position unless it would cover a face; then they move below the chin or above the eyes, staying inside the safe zones. The zone is chosen once per shot (with hysteresis), so captions don't jump around on close-ups. The hook text also moves off the speaker's head (hair, face and sides). Captions are hidden while the end card shows. Emoji pops pick a spot clear of faces, captions and the hook, trying smaller sizes and corners before skipping.
 - **Loudness and safe zones.** Audio gets a two-pass `loudnorm` to −14 LUFS / −1.5 dBTP and an 80 Hz high-pass (`--no-loudnorm` turns this off). All text stays inside the union of TikTok, Reels and Shorts safe zones:
   - top 288 px;
   - captions no lower than y≈1240;

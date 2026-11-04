@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-11-04
+
+### Fixed
+- The end card / narrator CTA no longer overlaps live captions: captions are hidden while it is on screen.
+- Hook text avoids the whole head (hair, forehead and sides of the face, not just eyes and mouth). It tries the usual top spot, just under the top safe line, below the head and lower alternate spots, and picks the least overlap.
+
 ## [0.2.0] - 2026-11-04
 
 ### Added

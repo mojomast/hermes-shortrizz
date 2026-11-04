@@ -191,6 +191,12 @@ def test_hook_avoids_hair_and_side_of_face():
     assert E.SAFE["top"] <= y0 and y1 <= E.SAFE["bottom_y"] - 200
     assert hb[0] < face[0] and hb[2] > face[2] and hb[1] < face[1]   # sides and hair included
 
+def test_hook_prefers_hair_over_mouth_when_it_must_overlap():
+    face = (300, 560, 780, 1000)                     # big head filling the middle of the frame
+    y, (y0, y1) = E.hook_y([(0.0, [face])], 2.8)
+    eyes_to_chin = (face[1] + 0.25 * (face[3] - face[1]), face[3])
+    assert max(0.0, min(y1, eyes_to_chin[1]) - max(y0, eyes_to_chin[0])) == 0
+
 def test_end_card_hides_live_captions():
     from shortrizz import captions
     st = captions.load_style("hormozi")

@@ -8,7 +8,7 @@ description: >-
   word-by-word captions, virality score, title, why-it-hooks and a caption with
   hashtags. Call the shortrizz_* tools. Jobs run in the background; poll
   shortrizz_status. Publishing is a dry-run plan only.
-version: "0.2.0"
+version: "0.2.1"
 author: mojomast
 license: MIT
 compatibility: >-

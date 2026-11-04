@@ -632,7 +632,9 @@ def hook_y(track, until, lines=2, size=110):
     line, below the head, and lower alternate spots, and picks the one covering the least of any head
     (forehead, hair and sides included). Returns (y_top, band) where band=(y0, y1)."""
     h = lines * size * 1.05 + 30
-    boxes = [head_box(b) for t, bx in track if t <= until for b in bx if (b[2] - b[0]) > 90]
+    faces = [b for t, bx in track if t <= until for b in bx if (b[2] - b[0]) > 90]
+    boxes = [head_box(b) for b in faces]
+    core = [(b[1] + 0.25 * (b[3] - b[1]), b[3]) for b in faces]   # eyes to chin: worst place for text
     base = max(int(1920 * 0.21), SAFE["top"] + 110)
     if not boxes:
         return base, (base, base + h)
@@ -640,7 +642,8 @@ def hook_y(track, until, lines=2, size=110):
     hy1 = sorted(b[3] for b in boxes)[len(boxes) // 2]
     cands = [base, SAFE["top"] + 12, int(hy1 + 24), int(lim - h)] + list(range(SAFE["top"] + 12, int(lim - h), 60))
     cands = [c for c in cands if SAFE["top"] <= c and c + h <= lim] or [base]
-    cost = lambda y: sum(max(0.0, min(y + h, b[3]) - max(y, b[1])) for b in boxes)
+    ov = lambda y, a, b: max(0.0, min(y + h, b) - max(y, a))
+    cost = lambda y: sum(ov(y, b[1], b[3]) for b in boxes) + 3 * sum(ov(y, a, b) for a, b in core)
     if cost(base) == 0:
         return base, (base, base + h)
     y = int(min(cands, key=lambda c: (round(cost(c)), abs(c - base))))
