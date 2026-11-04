@@ -6,7 +6,11 @@ description: >-
   transcribes it on CPU with faster-whisper, picks the best 30-60 s moments with
   an LLM (OpenCode Go key from the Hermes .env, or a built-in heuristic), reframes
   16:9 to 9:16 with face tracking, burns in word-by-word captions (Hormozi,
-  MrBeast, Abdaal or custom styles) and writes clips.json plus a gallery.
+  MrBeast, Abdaal or custom styles), tightens dead air, removes fillers and
+  false starts with a validated AI edit pass, adds a hook line, normalises
+  loudness and keeps text in platform safe zones and off faces. Opt-in effects:
+  cold open, AI narrator intro/outro, punch-in zooms, loop endings, emoji and
+  sound effects; optional watermark. Writes clips.json plus a gallery.
   Renders run as background jobs; poll shortrizz_status. Publishing is a
   dry-run plan only; nothing is uploaded. Only clip content you have rights to.
 author: mojomast

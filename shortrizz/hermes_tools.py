@@ -209,8 +209,8 @@ def make_shorts_tool(params=None, **_kw) -> str:
     argv += ["--out", str(out)]
     job = _start_job("make", argv, out)
     st = _wait(job, wait)
-    st["note"] = ("First run on a new video downloads and transcribes it (about 1/10 of its length on 8 CPU "
-                  "cores), then renders ~25 s per clip. Cached videos only re-render.")
+    st["note"] = ("First run on a new video downloads and transcribes it (about 1/10-1/4 of its length on 8 CPU "
+                  "cores), then renders about 1 min per clip with edits. Cached videos only re-render.")
     return _out(st)
 
 

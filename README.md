@@ -133,12 +133,14 @@ Every clip goes through an edit pass before it is rendered. These are **on by de
 - **LLM edit pass.** A second, cheap LLM call returns a word-index EDL: false starts, repeats and fillers to drop, a hook line, emphasis words and more. Code validates the EDL before it is used:
   - cuts land only on word boundaries;
   - numbers and negations (not, never, no, n't…) are never dropped;
+  - only true fillers ("um", "you know", "I mean", "like," used as a filler), exact stutter repeats ("that's that's") and restarts ("we went, we drove") can go. Pronouns, connectives and other meaning-bearing words ("I", "which is", "because") are never cut on their own;
   - at most 12% of a clip's words can be removed;
   - each dropped span is at most 6 words.
 
-  Simple rules catch um/uh and immediate 1–3-word repeats even without the LLM. Whisper is primed with a filler-style prompt so more fillers get transcribed. The EDL is saved as `NAME.edl.json` and in the cache, so `restyle` re-renders without the LLM. Disable the LLM pass with `--no-llm-edits`.
+  Simple rules catch um/uh and immediate 1–3-word repeats even without the LLM. (Priming Whisper with a filler-style prompt was tested and rejected: it made Whisper skip most of the speech.) The EDL is saved as `NAME.edl.json` and in the cache, so `restyle` re-renders without the LLM. Disable the LLM pass with `--no-llm-edits`.
 - **Hook text.** A 2–6-word on-screen hook shows for the first 0–2.8 s, below the top 288 px. Disable it with `--no-hook-text`.
-- **Loudness and safe zones.** Audio gets a two-pass `loudnorm` to −14 LUFS / −1 dBTP and an 80 Hz high-pass (`--no-loudnorm` turns this off). All text stays inside the union of TikTok, Reels and Shorts safe zones:
+- **Face-aware text.** Captions keep their style position unless it would cover a face; then they move below the chin or above the eyes, staying inside the safe zones. Emoji pops pick a spot clear of faces and captions, or are skipped.
+- **Loudness and safe zones.** Audio gets a two-pass `loudnorm` to −14 LUFS / −1.5 dBTP and an 80 Hz high-pass (`--no-loudnorm` turns this off). All text stays inside the union of TikTok, Reels and Shorts safe zones:
   - top 288 px;
   - captions no lower than y≈1240;
   - left 120 px and right 192 px.
@@ -149,13 +151,17 @@ These are **opt-in** and default off. Each has a CLI flag, a plugin tool paramet
 
 | flag | effect |
 |---|---|
-| `--cold-open` | flashes the clip's most striking 1–3.5 s line first, then a whoosh, then the clip |
-| `--tts-intro` / `--tts-outro` | narrator context line / CTA in a stock Kokoro-82M voice (Apache-2.0 weights via kokoro-onnx, MIT; CPU). Weights download to `~/.cache/shortrizz/kokoro`. It never clones the speaker, and clips are marked `synthetic_voice` in clips.json, so disclose AI voice where platforms require it |
+| `--cold-open` | flashes the clip's most striking 2–5 s line first (a clause is fine; long LLM picks are trimmed, and a heuristic picks one if the LLM doesn't), then a whoosh, then the clip |
+| `--tts-intro` / `--tts-outro` | narrator context line / CTA over a held frame (the sharpest, steadiest frame with a clear face nearby) in a stock Kokoro-82M voice (Apache-2.0 weights via kokoro-onnx, MIT; CPU). Weights download to `~/.cache/shortrizz/kokoro`. It never clones the speaker, and clips are marked `synthetic_voice` in clips.json, so disclose AI voice where platforms require it |
 | `--zoom` | 1.0→1.12 punch-in on emphasis words; alternating 1.0/1.08 scale on jump cuts |
 | `--loop` | ends on the LLM's loop word with no tail or fade, so the replay flows back into the opening (when looping, the CTA is text-only) |
 | `--emoji` | emoji pops above the captions (system Noto Color Emoji font) |
 | `--sfx` | sparse pop/whoosh sounds at −20 dB, no closer than 3.5 s apart. They are synthesised by `scripts/make_sfx.py` and released CC0 (see `assets/sfx/LICENSE.txt`) |
 | `--length tight` | 20–35 s clips |
+
+**Length budget.** The narrator intro/outro and the cold open are paid for by trimming the end of the body at a sentence end or pause, so a finished clip is never longer than its source range or the `--max` of its length band. If the body would get too short, the outro, then the intro, then the cold open are dropped first.
+
+Sources above 30 fps are rendered at 30 fps by the edit renderer. Clips are written to `NAME.partial.mp4` and renamed when the encode finishes.
 
 `--no-edits` gives the old plain render (one continuous range). clips.json reports the edits for each clip: seconds removed, cuts, dropped words, the hook, and the final length. Music beds, B-roll and split-screen are deliberately not built.
 
@@ -231,8 +237,16 @@ flowchart LR
 ```
 
 On 8 CPU cores, an 18.5-minute 1080p podcast took about 28 s to download and 1 min 46 s to transcribe with
-Whisper `small`. The LLM pick took about 45–80 s, and rendering took about 25 s per 45 s clip. A full first
+Whisper `small` in int8 (float32, now the default, is roughly 1.5–3× slower). The LLM pick took about 45–80 s, and rendering took about 25 s per 45 s clip. A full first
 run took about 5.5 minutes. A restyle takes about 2 minutes.
+
+## Transcription safeguards
+
+Whisper runs in **float32** on CPU by default: int8 decoding silently dropped minutes of clear speech on some sources (set `SHORTRIZZ_COMPUTE_TYPE=int8` to trade reliability for speed). Every transcript is checked before use:
+
+- no conditioning on previous text, temperature fallback and compression/no-speech thresholds stop "I'm I'm I'm" loops; looping segments are re-transcribed on their own;
+- a transcript is rejected if it loops, is too sparse for its length, or covers less than 80% of the speech that silero-vad hears. Rejected caches are redone, and a still-bad transcript stops the run with a clear message instead of making garbage clips;
+- clip boundaries snap to sentence ends, then to Whisper segment edges or pauses ≥ 0.35 s, because Whisper often emits little punctuation.
 
 ## Limitations
 
@@ -243,6 +257,8 @@ run took about 5.5 minutes. A restyle takes about 2 minutes.
 - Virality scores are an LLM's judgement. They aren't trained on engagement data.
 - Caption accuracy is limited by Whisper. `--model medium` or `--model large-v3` is better but slower.
 - Clips can run about 0.3 s past `--max` because of the padding at the end.
+- On tight close-ups there may be no face-free caption spot inside the safe zones; captions then sit on the forehead/hair rather than the mouth.
+- The edit renderer processes frames in Python; expect roughly 1 minute per 40 s clip on 8 cores at 30 fps.
 - Live posting isn't implemented. `shortrizz/publish.py` documents the YouTube Data API, the TikTok Content
   Posting API and the Instagram Graph API hooks.
 

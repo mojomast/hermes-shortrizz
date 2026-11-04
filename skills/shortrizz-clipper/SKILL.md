@@ -41,12 +41,22 @@ you start.
 3. `shortrizz_status` with `job_id` and `wait_seconds: 240`. Repeat while
    `status` is `running`. Progress shows `stage` (download, transcribe, select,
    render) and `done/total` clips. Timing on 8 CPU cores: transcription takes
-   about 1/10 of the video's length (an 18 min video takes about 2 min), the
-   LLM pick takes about 1 min, and each clip renders in about 25 s. A cached
+   about 1/10-1/4 of the video's length (an 18 min video takes about 2-5 min), the
+   LLM pick takes about 1 min, and each clip renders in about 1 min with edits. A cached
    video only re-renders.
 4. When `status` is `done`, report each clip: file path, title, virality score,
    duration, why it hooks and the suggested caption with hashtags. Also give the
    `gallery` (index.html) path.
+   Every clip also gets the default edit pass (dead-air tightening, AI removal
+   of fillers/repeats/restarts, a hook line in the first 3 s, -14 LUFS loudness,
+   safe-zone text placement off faces). Optional parameters: `edit`
+   (`off|light|normal|aggressive`), `deeper_edits: false` for a plain render,
+   `llm_edits`, `hook_text`, `loudnorm`, and the opt-in effects `cold_open`,
+   `tts_intro`, `tts_outro` (AI narrator, stock voice; tell the user it is a
+   synthetic voice), `zoom`, `loop`, `emoji`, `sfx`. `length: "tight"` gives
+   20-35 s clips. `watermark` burns in the Shortrizz mark (off unless the user's
+   config turns it on). Each clip in the result reports its edits: seconds
+   removed, cuts, effects and final length.
 5. Optional: `shortrizz_render_style` with `run_dir` (the finished `out_dir`)
    and a new `style` re-renders the same clips without re-transcribing.
 6. Optional: `shortrizz_publish_plan` writes a dry-run schedule to
