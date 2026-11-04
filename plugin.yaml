@@ -27,7 +27,6 @@ provides_tools:
   - shortrizz_render_style
   - shortrizz_publish_plan
 provides_hooks: []
-provides_middleware: []
 requires_env: []
 # Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
 # ffmpeg/ffprobe must be on PATH (system package). deno is optional but makes
