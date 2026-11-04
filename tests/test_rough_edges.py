@@ -49,7 +49,7 @@ def test_length_budget_trims_body(monkeypatch, tmp_path):
     monkeypatch.setattr(E, "speech_mask", lambda *a, **k: None)
     opts = {**E.DEFAULTS, **{k: True for k in E.OPT_INS}, "loop": False, "max_len": 40, "min_len": 30}
     edl = {"gap_policy": E.PRESETS["normal"], "drop": [], "intro": "a narrator line", "cta": "Follow",
-           "cold_open": {"w0": 20, "w1": 27, "text": "x"}, "hook_text": "Hook", "emphasis": [], "emoji": []}
+           "cold_open": {"w0": 16, "w1": 23, "text": "x"}, "hook_text": "Hook", "emphasis": [], "emoji": []}
     items, cw, ovl, fx, rep, total = E.assemble("x.mp4", ws, clip, edl, opts, captions.load_style("hormozi"),
                                                 tmp_path, "c")
     assert total <= 40.05 and total <= clip["end"] - clip["start"]
