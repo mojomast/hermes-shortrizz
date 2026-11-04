@@ -173,7 +173,7 @@ def _measure_loudness(src, inputs, chains, label):
 
 def prepare(src, clip_start, clip_end, reframe_mode="auto"):
     sw, sh, fps = probe(src)
-    fps = min(fps, 60.0)
+    fps = min(fps, 30.0) if fps > 31 else fps  # 60 fps sources render at 30: half the CPU, fine for Shorts
     plan = reframe.make_plan(src, clip_start, clip_end - clip_start, sw, sh, reframe_mode)
     return {"src": src, "sw": sw, "sh": sh, "fps": fps, "plan": plan, "clip_start": clip_start}
 

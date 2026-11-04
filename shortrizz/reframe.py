@@ -161,11 +161,11 @@ def render_frames(src, start, dur, sw, sh, fps, out_w=1080, out_h=1920, analysis
     """Yield output frames (out_h x out_w BGR). analysis: (xs, afps) or None for letterbox."""
     crop_w = int(round(sh * out_w / out_h / 2) * 2)
     if analysis is None or crop_w >= sw:
-        for fr in read_frames(src, start, dur, sw, sh):
+        for fr in read_frames(src, start, dur, sw, sh, fps):
             yield letterbox(fr, out_w, out_h)
         return
     xs, afps = analysis
-    for k, fr in enumerate(read_frames(src, start, dur, sw, sh)):
+    for k, fr in enumerate(read_frames(src, start, dur, sw, sh, fps)):
         t = k / fps + t_offset  # t_offset: where this sub-range starts inside the analysed range
         j = min(len(xs) - 1, int(t * afps))
         j2 = min(len(xs) - 1, j + 1)
