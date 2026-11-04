@@ -22,6 +22,17 @@ STYLES = {
                    pop=100, highlight_bg=True, highlight_bg_color="#3A7BFF", spacing=0, dim="#D8D8D8"),
 }
 
+STYLE_NOTES = {
+    "hormozi": "Bold uppercase Poppins Black, white with yellow active word, thick black outline, lower-middle.",
+    "mrbeast": "Chunky Luckiest Guy, 2 words per line, green/yellow/red highlight cycle, heavy outline.",
+    "abdaal": "Clean minimal Inter, sentence case, dimmed inactive words, blue glow on the active word.",
+}
+
+def describe_styles():
+    return {"builtin": {k: {"description": STYLE_NOTES.get(k, ""), "font": v["font"], "max_words": v["max_words"]}
+                        for k, v in STYLES.items()},
+            "custom": "Pass a path to a JSON file with 'base' plus any keys to override: " + ", ".join(sorted(STYLES["hormozi"]))}
+
 def load_style(name_or_path):
     if name_or_path in STYLES:
         return dict(STYLES[name_or_path])

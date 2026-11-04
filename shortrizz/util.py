@@ -12,7 +12,7 @@ def run(cmd, **kw):
     return subprocess.run([str(c) for c in cmd], **kw)
 
 def log(msg):
-    print(f"[shortsmith {time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+    print(f"[shortrizz {time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 def load_env_file(path):
     """Load KEY=VALUE pairs from a dotenv file into os.environ (no overwrite). Never logs values."""
@@ -35,3 +35,8 @@ def ffprobe_duration(path):
 
 def fmt_dur(s):
     return f"{int(s//60)}:{int(s%60):02d}"
+
+def models_dir():
+    d = Path(os.environ.get("SHORTRIZZ_MODELS", Path.home() / ".cache" / "shortrizz" / "models")).expanduser()
+    d.mkdir(parents=True, exist_ok=True)
+    return d

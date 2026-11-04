@@ -22,7 +22,7 @@ class Publisher:
     name = "base"
     env_vars: list = []
     def enabled(self):
-        return os.environ.get(f"SHORTSMITH_ENABLE_{self.name.upper()}") == "1"
+        return os.environ.get(f"SHORTRIZZ_ENABLE_{self.name.upper()}") == "1"
     def build_request(self, clip, when):
         return {"platform": self.name, "file": clip["file"], "scheduled_for": when.isoformat(),
                 "title": clip["title"][:100], "caption": f"{clip['caption']} {' '.join(clip['hashtags'])}".strip()}
@@ -59,7 +59,7 @@ def plan(out_dir, platforms, start=None, every_hours=24, live=False):
             r["status"] = "dry-run"
             if live:
                 if not p.enabled():
-                    r["status"] = f"skipped (set SHORTSMITH_ENABLE_{name.upper()}=1 and implement upload())"
+                    r["status"] = f"skipped (set SHORTRIZZ_ENABLE_{name.upper()}=1 and implement upload())"
                 else:
                     p.upload(r); r["status"] = "uploaded"
             reqs.append(r)

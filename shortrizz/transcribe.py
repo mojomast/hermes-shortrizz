@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from .util import log
+from .util import log, models_dir
 
 def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
     """faster-whisper on CPU with word timestamps. Cached as JSON next to the download."""
@@ -11,7 +11,7 @@ def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
     from faster_whisper import WhisperModel
     log(f"transcribing with faster-whisper '{model_size}' (CPU int8)…")
     model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=threads,
-                         download_root=str(Path(__file__).resolve().parent.parent / "models" / "whisper"))
+                         download_root=str(models_dir() / "whisper"))
     import subprocess, numpy as np
     has_audio = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
                                 "stream=index", "-of", "csv=p=0", str(video)], capture_output=True, text=True).stdout.strip()

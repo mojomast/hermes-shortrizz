@@ -3,7 +3,7 @@ __pycache__/
 *.egg-info/
 models/
 out/
-shortsmith-out/
+shortrizz-out/
 *.mp4
 *.mkv
 *.webm
@@ -15,3 +15,8 @@ shortsmith-out/
 *token*.json
 client_secret*.json
 publish_plan.json
+progress.json
+job.log
+shortrizz-runs/
+.pytest_cache/
+build/

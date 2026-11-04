@@ -1,0 +1,40 @@
+name: shortrizz
+version: "0.2.0"
+description: >-
+  Skill id shortrizz:shortrizz-clipper. Shortrizz is a self-hosted AI clipper,
+  a sibling of Comfyrizz: give it a long video URL or file and it downloads it,
+  transcribes it on CPU with faster-whisper, picks the best 30-60 s moments with
+  an LLM (OpenCode Go key from the Hermes .env, or a built-in heuristic), reframes
+  16:9 to 9:16 with face tracking, burns in word-by-word captions (Hormozi,
+  MrBeast, Abdaal or custom styles) and writes clips.json plus a gallery.
+  Renders run as background jobs; poll shortrizz_status. Publishing is a
+  dry-run plan only; nothing is uploaded. Only clip content you have rights to.
+author: mojomast
+license: MIT
+homepage: https://github.com/mojomast/hermes-shortrizz
+tags:
+  - video
+  - shorts
+  - captions
+  - clipping
+  - skills
+manifest_version: 2
+api_version: 1
+provides_tools:
+  - shortrizz_make_shorts
+  - shortrizz_status
+  - shortrizz_list_styles
+  - shortrizz_render_style
+  - shortrizz_publish_plan
+provides_hooks: []
+provides_middleware: []
+requires_env: []
+# Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
+# ffmpeg/ffprobe must be on PATH (system package). deno is optional but makes
+# YouTube downloads reliable.
+python_dependencies:
+  - "faster-whisper>=1.0,<2"
+  - "opencv-python-headless>=4.9,<6"
+  - "numpy>=1.26,<3"
+  - "requests>=2.31,<3"
+  - "yt-dlp>=2025.1.1,<2028"

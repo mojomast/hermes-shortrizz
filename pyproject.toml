@@ -1,16 +1,36 @@
-[project]
-name = "shortsmith"
-version = "0.1.0"
-description = "Self-hosted AI clipper: long video -> captioned 9:16 shorts"
-requires-python = ">=3.10"
-dependencies = ["faster-whisper>=1.0", "opencv-python-headless>=4.8", "numpy", "requests"]
-
-[project.scripts]
-shortsmith = "shortsmith.cli:main"
-
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["shortsmith"]
+[project]
+name = "hermes-shortrizz"
+version = "0.2.0"
+description = "Shortrizz: self-hosted AI clipper. Long video in, captioned 9:16 shorts out. CLI + Hermes plugin."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Kyle Durepos" }]
+keywords = ["hermes", "shorts", "tiktok", "reels", "clipping", "whisper", "captions"]
+dependencies = [
+  "faster-whisper>=1.0,<2",
+  "opencv-python-headless>=4.9,<6",
+  "numpy>=1.26,<3",
+  "requests>=2.31,<3",
+  "yt-dlp>=2025.1.1,<2028",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pyyaml>=6,<7"]
+
+[project.urls]
+Homepage = "https://github.com/mojomast/hermes-shortrizz"
+
+[project.scripts]
+shortrizz = "shortrizz.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["shortrizz*"]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+shortrizz = ["assets/*.svg"]

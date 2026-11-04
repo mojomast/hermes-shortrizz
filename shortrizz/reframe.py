@@ -11,16 +11,30 @@ import os, subprocess
 from pathlib import Path
 import numpy as np
 import cv2
-from .util import log
+from .util import log, models_dir
 
-MODEL = Path(__file__).resolve().parent.parent / "models" / "face_detection_yunet_2023mar.onnx"
+YUNET_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/"
+             "face_detection_yunet_2023mar.onnx")
+
+def yunet_model():
+    """Path to the YuNet face model, downloaded once into the models cache. None -> Haar fallback."""
+    p = models_dir() / "face_detection_yunet_2023mar.onnx"
+    if not p.exists() and os.environ.get("SHORTRIZZ_OFFLINE") != "1":
+        try:
+            import urllib.request
+            log("downloading YuNet face model (230 KB)…")
+            urllib.request.urlretrieve(YUNET_URL, p.with_suffix(".part")); p.with_suffix(".part").rename(p)
+        except Exception as e:
+            log(f"YuNet download failed ({e}); using Haar cascade")
+    return p if p.exists() else None
 AW = 960  # analysis width (mouth-motion needs enough face pixels)
 
 class Detector:
     def __init__(self, w, h):
         self.yn = None
-        if MODEL.exists():
-            self.yn = cv2.FaceDetectorYN.create(str(MODEL), "", (w, h), 0.6, 0.3, 50)
+        m = yunet_model()
+        if m is not None:
+            self.yn = cv2.FaceDetectorYN.create(str(m), "", (w, h), 0.6, 0.3, 50)
         else:
             self.haar = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
@@ -122,7 +136,7 @@ def plan(tracks, nsteps, fps, scale, sw, sh, crop_w, audio=None, min_shot=3.0, s
         if best != cur and (score[cur, k] <= 0 or (since >= min_shot and score[best, k] > switch_ratio * score[cur, k])):
             cur, since = best, 0.0
         target.append(cur)
-    if os.environ.get("SHORTSMITH_DEBUG"):
+    if os.environ.get("SHORTRIZZ_DEBUG"):
         log("  speaker timeline: " + "".join(str(t) for t in target[::fps]))
     xs, x = [], None
     dead = crop_w * 0.08
