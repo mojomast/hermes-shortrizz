@@ -48,7 +48,7 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
             band = None
             for o in ovl:
                 if o.get("pos") == "top":
-                    o["y"], band = edits.hook_y(track, o["t1"])
+                    o["y"], band = edits.hook_y(track, o["t1"], text=o["text"])
             y_at = edits.caption_y_fn(track, base_y, style["size"], hook_until, band)
             if fx.get("emoji"):
                 fx["emoji_places"] = edits.emoji_places(track, fx["emoji"], y_at, hook_band=band, hook_until=hook_until)

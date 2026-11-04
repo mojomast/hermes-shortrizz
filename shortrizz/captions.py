@@ -77,14 +77,18 @@ def pages(words, max_words):
 
 SAFE_BOTTOM_Y, SAFE_TOP = 1240, 288   # platform UI covers below ~1240 px and above 288 px (1080x1920)
 
+def hook_size(txt, W=1080):
+    """(font size, lines) for hook text: fit on at most two lines inside the safe width (768 px),
+    Poppins Black ~0.62 em per caps glyph."""
+    per_line = max(len(txt) / 2, max(len(x) for x in txt.split())) if len(txt) > 13 else len(txt)
+    return int(max(72, min(132, (W - 120 - 192 - 40) / max(1, per_line * 0.58)))), (2 if len(txt) > 13 else 1)
+
 def overlay_events(overlays, W=1080, H=1920):
     """Hook text (first 0-3 s, top safe zone, below the watermark) and an end CTA, as ASS events."""
     ev = []
     for o in overlays or []:
         txt = clean(o["text"], True)
-        # big: fit on at most two lines inside the safe width (768 px), Poppins Black ~0.62 em per caps glyph
-        per_line = max(len(txt) / 2, max(len(x) for x in txt.split())) if len(txt) > 13 else len(txt)
-        size = int(max(72, min(132, (W - 120 - 192 - 40) / max(1, per_line * 0.58))))
+        size, _ = hook_size(txt, W)
         y = int(H * 0.21) if o.get("pos", "top") == "top" else int(H * 0.50)
         y = o.get("y", max(y, SAFE_TOP + 110))  # face-aware hook position from the pipeline
         fade = "\\fad(120,180)"

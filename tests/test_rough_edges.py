@@ -221,3 +221,13 @@ def test_emoji_uses_fallback_spots():
     x, y, sz = pl
     assert E.SAFE["top"] <= y - sz / 2 and y + sz / 2 <= E.SAFE["bottom_y"]
     assert not (face[0] < x < face[2] and face[1] < y < face[3])
+
+
+def test_hook_band_matches_text_and_sits_above_eyes():
+    from shortrizz import captions
+    face = (400, 400, 700, 840)                      # real close-up from the power-grid QA clip
+    y, (y0, y1) = E.hook_y([(t * 0.5, [face]) for t in range(6)], 2.8, text="Spinning Metal Stabilizes Grid")
+    size, lines = captions.hook_size("SPINNING METAL STABILIZES GRID")
+    assert abs((y1 - y0) - (lines * size * 1.05 + 30)) < 1
+    ey = face[1] + 0.25 * (face[3] - face[1])
+    assert max(0.0, min(y1, face[3]) - max(y0, ey)) <= 0.1 * (y1 - y0)   # above the eyes or under the chin

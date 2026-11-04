@@ -627,10 +627,13 @@ def head_box(b):
     w, h = b[2] - b[0], b[3] - b[1]
     return (b[0] - 0.25 * w, b[1] - 0.6 * h, b[2] + 0.25 * w, b[3] + 0.15 * h)
 
-def hook_y(track, until, lines=2, size=110):
+def hook_y(track, until, lines=2, size=110, text=None):
     """Top y for the hook text in the first `until` s. Tries the usual top spot, just under the top safe
     line, below the head, and lower alternate spots, and picks the one covering the least of any head
     (forehead, hair and sides included). Returns (y_top, band) where band=(y0, y1)."""
+    if text:
+        from . import captions
+        size, lines = captions.hook_size(captions.clean(text, True))
     h = lines * size * 1.05 + 30
     faces = [b for t, bx in track if t <= until for b in bx if (b[2] - b[0]) > 90]
     boxes = [head_box(b) for b in faces]
@@ -640,7 +643,8 @@ def hook_y(track, until, lines=2, size=110):
         return base, (base, base + h)
     lim = SAFE["bottom_y"] - 200          # leave room for the caption line under it
     hy1 = sorted(b[3] for b in boxes)[len(boxes) // 2]
-    cands = [base, SAFE["top"] + 12, int(hy1 + 24), int(lim - h)] + list(range(SAFE["top"] + 12, int(lim - h), 60))
+    ey0 = sorted(a for a, _ in core)[len(core) // 2]
+    cands = [base, SAFE["top"] + 12, int(ey0 - h - 8), int(hy1 + 24), int(lim - h)] + list(range(SAFE["top"] + 12, int(lim - h), 60))
     cands = [c for c in cands if SAFE["top"] <= c and c + h <= lim] or [base]
     ov = lambda y, a, b: max(0.0, min(y + h, b) - max(y, a))
     cost = lambda y: sum(ov(y, b[1], b[3]) for b in boxes) + 3 * sum(ov(y, a, b) for a, b in core)
