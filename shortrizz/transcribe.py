@@ -31,4 +31,10 @@ def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
     return out
 
 def all_words(tr):
-    return [w for s in tr["segments"] for w in s["words"]]
+    """Flat word list; marks Whisper segment edges (ss/se) as fallback phrase boundaries."""
+    out = []
+    for s in tr["segments"]:
+        ws = s["words"]
+        for i, w in enumerate(ws):
+            out.append({**w, "ss": i == 0, "se": i == len(ws) - 1})
+    return out

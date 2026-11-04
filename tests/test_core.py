@@ -88,3 +88,16 @@ def test_publish_dry_run(tmp_path):
     assert (tmp_path / "publish_plan.json").exists()
     with pytest.raises(NotImplementedError):
         publish.PUBLISHERS["tiktok"].upload({})
+
+def test_snap_without_punctuation_keeps_distinct_clips():
+    # Whisper sometimes returns almost no punctuation: picks must not collapse onto one sentence
+    words = []
+    t = 0.0
+    for k in range(600):
+        words.append({"w": f"word{k}", "s": round(t, 2), "e": round(t + 0.25, 2), "ss": k % 20 == 0, "se": k % 20 == 19})
+        t += 0.3 + (0.5 if k % 20 == 19 else 0)
+    a = clipselect.snap(words, 20, 55, 30, 60)
+    b = clipselect.snap(words, 100, 140, 30, 60)
+    assert a and b and a != b
+    assert abs(words[a[0]]["s"] - 20) <= 4 and abs(words[b[0]]["s"] - 100) <= 4
+    assert words[a[0]]["ss"] and words[b[1]]["se"]

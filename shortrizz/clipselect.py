@@ -11,31 +11,51 @@ KEY_VAR = "OPENCODE_GO_API_KEY"
 END_PUNCT = (".", "?", "!")
 
 # ---------------------------------------------------------------- boundaries
+def _gap_before(words, i):
+    return words[i]["s"] - words[i - 1]["e"] if i > 0 else 9.0
+
+def _gap_after(words, i):
+    return words[i + 1]["s"] - words[i]["e"] if i + 1 < len(words) else 9.0
+
+def start_rank(words, i):
+    """0 = sentence start, 1 = segment start / pause, 2 = any word."""
+    if i == 0 or words[i - 1]["w"].endswith(END_PUNCT):
+        return 0
+    if words[i].get("ss") or _gap_before(words, i) >= 0.35 or words[i - 1]["w"].endswith((",", ";", ":")):
+        return 1
+    return 2
+
+def end_rank(words, j):
+    if words[j]["w"].endswith(END_PUNCT):
+        return 0
+    if words[j].get("se") or _gap_after(words, j) >= 0.35:
+        return 1
+    return 2
+
+def snap(words, start, end, mn, mx, window=4.0):
+    """Snap (start,end) seconds to the best nearby sentence/phrase boundaries, keeping mn..mx length.
+
+    Prefers true sentence boundaries, then Whisper segment edges or pauses, then any word
+    (Whisper sometimes emits almost no punctuation). Start must lie within `window` s of the request.
+    Returns (i0, j) word indices or None."""
+    if not words:
+        return None
+    near = [i for i, w in enumerate(words) if abs(w["s"] - start) <= window]
+    if not near:
+        near = [min(range(len(words)), key=lambda i: abs(words[i]["s"] - start))]
+    i0 = min(near, key=lambda i: (start_rank(words, i), abs(words[i]["s"] - start)))
+    t0 = words[i0]["s"]
+    cand = [j for j in range(i0, len(words)) if mn <= words[j]["e"] - t0 <= mx]
+    if not cand:
+        return None
+    j = min(cand, key=lambda j: (end_rank(words, j), abs(words[j]["e"] - end)))
+    return i0, j
+
 def sentence_starts(words):
-    return [i for i, w in enumerate(words) if i == 0 or words[i-1]["w"].endswith(END_PUNCT)]
+    return [i for i in range(len(words)) if start_rank(words, i) <= 1]
 
 def sentence_ends(words):
-    return [i for i, w in enumerate(words) if w["w"].endswith(END_PUNCT)]
-
-def snap(words, start, end, mn, mx):
-    """Snap (start,end) seconds to sentence boundaries, keep within [mn,mx]. Returns word indices or None."""
-    ss, es = sentence_starts(words), sentence_ends(words)
-    if not ss or not es:
-        return None
-    i0 = min(ss, key=lambda i: abs(words[i]["s"] - start))
-    t0 = words[i0]["s"]
-    ok = [j for j in es if j > i0 and mn <= words[j]["e"] - t0 <= mx]
-    if ok:
-        j = min(ok, key=lambda j: abs(words[j]["e"] - end))
-    else:  # no sentence end in range: fall back to any word end in range (prefer a pause)
-        cand = [j for j in range(i0, len(words)) if mn <= words[j]["e"] - t0 <= mx]
-        if not cand:
-            return None
-        def pause(j):
-            nxt = words[j+1]["s"] if j + 1 < len(words) else words[j]["e"] + 1
-            return nxt - words[j]["e"]
-        j = max(cand, key=lambda j: (pause(j), -abs(words[j]["e"] - end)))
-    return i0, j
+    return [j for j in range(len(words)) if end_rank(words, j) <= 1]
 
 def transcript_text(tr, max_chars=60000):
     lines = [f"[{s['s']:.1f}-{s['e']:.1f}] {s['text']}" for s in tr["segments"]]
