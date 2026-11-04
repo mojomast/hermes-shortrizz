@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-shortrizz"
-version = "0.2.0"
+version = "0.1.0"
 description = "Shortrizz: self-hosted AI clipper. Long video in, captioned 9:16 shorts out. CLI + Hermes plugin."
 readme = "README.md"
 requires-python = ">=3.10"
