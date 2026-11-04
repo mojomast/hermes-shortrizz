@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - 2026-11-04
 
 ### Added
 - **Deeper edits, on by default:** dead-air tightening (gaps > 0.35 s → ~0.15 s, 0.08/0.12 s word padding, silero-vad aligned cut points, 15 ms equal-power crossfades, captions retimed); a second LLM pass that returns a validated word-index EDL (cached, so `restyle` needs no LLM); on-screen hook text in the first 0–2.8 s; two-pass loudnorm to −14 LUFS / −1.5 dBTP with an 80 Hz high-pass; platform safe zones for all text. `--edit off|light|normal|aggressive`, `--no-llm-edits`, `--no-hook-text`, `--no-loudnorm`, `--no-edits`.
@@ -8,6 +8,7 @@
 - **Watermark (default off):** the sliced-play mark, enabled per user with `--watermark`, `SHORTRIZZ_WATERMARK=1` or `"watermark": true` in `~/.config/shortrizz/config.json`; `watermark` parameter on the make and render_style tools. Adaptive dark outline and backing pill keep it readable on white.
 - New **sliced-play logo** across the logo, icon, banner and watermark (`scripts/make_brand.py`).
 - Transcript sanity checks: loop detection and repair, sparse-speech and VAD speech-coverage checks; bad caches are redone.
+- `--avoid-previous` (plugin `avoid_previous`) skips moments earlier runs on the same video used (logged in the cache); `--exclude RUN_DIR|clips.json` skips a specific run's moments.
 - `CHANGELOG.md`.
 
 ### Changed
@@ -21,6 +22,8 @@
 - The AI edit pass no longer cuts pronouns, connectives or meaning words ("I", "which is"); only fillers, exact repeats and restarts.
 - Cold open now fires reliably: clause-level 2–5 s picks, trimming of long LLM picks, heuristic fallback.
 - Narrator intro/outro and cold open no longer make clips longer than their source or length band: the body is trimmed at a sentence end or pause.
+- Tight clips (`--length tight`) with all effects auto-skip the narrator intro/outro and shorten the cold open so the speaker fills at least ~70% of the runtime (logged; explicit `--tts-intro`/`--tts-outro` still force them).
+- Hook text is face-aware; captions keep one position per shot (with hysteresis) instead of jumping between forehead and chest; emoji fall back to smaller sizes and corner spots instead of being skipped.
 - Captions and emoji avoid faces; the narrator hold frame is the sharpest, steadiest frame with a clear face.
 - Captions glue Whisper's split numbers ("$3 ,000" → "$3,000").
 - A hung LLM call can no longer stall a render (hard 120 s deadline); frame-reader processes are closed when a segment ends early.

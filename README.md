@@ -139,7 +139,7 @@ Every clip goes through an edit pass before it is rendered. These are **on by de
 
   Simple rules catch um/uh and immediate 1–3-word repeats even without the LLM. (Priming Whisper with a filler-style prompt was tested and rejected: it made Whisper skip most of the speech.) The EDL is saved as `NAME.edl.json` and in the cache, so `restyle` re-renders without the LLM. Disable the LLM pass with `--no-llm-edits`.
 - **Hook text.** A 2–6-word on-screen hook shows for the first 0–2.8 s, below the top 288 px. Disable it with `--no-hook-text`.
-- **Face-aware text.** Captions keep their style position unless it would cover a face; then they move below the chin or above the eyes, staying inside the safe zones. Emoji pops pick a spot clear of faces and captions, or are skipped.
+- **Face-aware text.** Captions keep their style position unless it would cover a face; then they move below the chin or above the eyes, staying inside the safe zones. The zone is chosen once per shot (with hysteresis), so captions don't jump around on close-ups. The hook text also moves off eyes and mouth. Emoji pops pick a spot clear of faces, captions and the hook, trying smaller sizes and corners before skipping.
 - **Loudness and safe zones.** Audio gets a two-pass `loudnorm` to −14 LUFS / −1.5 dBTP and an 80 Hz high-pass (`--no-loudnorm` turns this off). All text stays inside the union of TikTok, Reels and Shorts safe zones:
   - top 288 px;
   - captions no lower than y≈1240;
@@ -157,11 +157,13 @@ These are **opt-in** and default off. Each has a CLI flag, a plugin tool paramet
 | `--loop` | ends on the LLM's loop word with no tail or fade, so the replay flows back into the opening (when looping, the CTA is text-only) |
 | `--emoji` | emoji pops above the captions (system Noto Color Emoji font) |
 | `--sfx` | sparse pop/whoosh sounds at −20 dB, no closer than 3.5 s apart. They are synthesised by `scripts/make_sfx.py` and released CC0 (see `assets/sfx/LICENSE.txt`) |
-| `--length tight` | 20–35 s clips |
+| `--length tight` | 20–35 s clips. With narrator effects on, the intro/outro are skipped and the cold open shortened so the speaker fills ≥ 70% of the clip, unless `--tts-intro`/`--tts-outro` are given explicitly |
 
 **Length budget.** The narrator intro/outro and the cold open are paid for by trimming the end of the body at a sentence end or pause, so a finished clip is never longer than its source range or the `--max` of its length band. If the body would get too short, the outro, then the intro, then the cold open are dropped first.
 
 Sources above 30 fps are rendered at 30 fps by the edit renderer. Clips are written to `NAME.partial.mp4` and renamed when the encode finishes.
+
+**Repeat runs.** `--avoid-previous` skips moments that earlier runs on the same video already used (recorded in the cache), and `--exclude RUN_DIR` skips one run's moments, so a second pass (for example `--length tight`) finds new material.
 
 `--no-edits` gives the old plain render (one continuous range). clips.json reports the edits for each clip: seconds removed, cuts, dropped words, the hook, and the final length. Music beds, B-roll and split-screen are deliberately not built.
 
