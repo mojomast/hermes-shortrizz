@@ -133,7 +133,14 @@ def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=N
     prog = Progress(out)
     from .watermark import settings as wm_settings
     wm = wm_settings(watermark)
-    results = render_clips(src, words, clips, out, style, reframe, preset, progress=prog, watermark=wm)
+    eo = _edit_opts(edits)
+    prev_edls = {}
+    for i, p in enumerate(prev["clips"], 1):  # reuse the saved EDLs -> no LLM call on restyle
+        f = run_dir / p.get("edl", "-")
+        if p.get("edl") and f.exists():
+            prev_edls[i] = json.loads(f.read_text())
+    results = render_clips(src, words, clips, out, style, reframe, preset, progress=prog, watermark=wm,
+                           edit_opts=eo, cache=cache, tr_hash=_tr_hash(tr), prev_edls=prev_edls)
     doc = {**prev, "settings": {**prev["settings"], "style": style, "reframe": reframe,
                                                  "watermark": wm["watermark"], "edits": eo},
            "timings_sec": {"render": round(time.time() - t0, 1)}, "clips": results, "restyled_from": str(run_dir),

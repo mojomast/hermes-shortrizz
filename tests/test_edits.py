@@ -74,3 +74,17 @@ def test_safe_zones_for_captions_and_hook():
 def test_zoom_schedule():
     fx = {"bases": [(0, 1, 1.0), (1, 2, 1.08)], "punches": [(1.5, 2.0)]}
     assert R.zoom_at(0.5, fx) == 1.0 and R.zoom_at(1.2, fx) == 1.08 and R.zoom_at(1.9, fx) > 1.1
+
+def test_restyle_passes_edit_options(monkeypatch, tmp_path):
+    from shortrizz import pipeline as P
+    seen = {}
+    run = tmp_path / "run"; run.mkdir()
+    (run / "clips.json").write_text(json.dumps({"source": {"video_path": str(tmp_path / "v.mp4")},
+        "settings": {"cache": str(tmp_path), "model": "small", "reframe": "auto"},
+        "clips": [{"start": 0, "end": 1, "title": "t", "virality_score": 1, "why_it_hooks": "", "caption": "",
+                   "hashtags": [], "method": "llm"}]}))
+    monkeypatch.setattr(P.T, "transcribe", lambda *a, **k: {"segments": [{"text": "hi", "words": [{"w": "hi", "s": 0, "e": .5}]}]})
+    monkeypatch.setattr(P, "render_clips", lambda *a, **k: seen.update(k) or [])
+    monkeypatch.setattr(P, "write_outputs", lambda *a, **k: None)
+    P.restyle(run, "hormozi", tmp_path / "o", edits={"zoom": True})
+    assert seen["edit_opts"]["zoom"] and seen["edit_opts"]["enabled"]
