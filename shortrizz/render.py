@@ -197,52 +197,91 @@ def faces_in(fr):
     small = cv2.resize(fr, (360, 640), interpolation=cv2.INTER_AREA)
     return [(x * 3, y * 3, (x + w) * 3, (y + h) * 3) for x, y, w, h in _DET["d"](small) if w > 18]
 
-def best_hold_frame(ctx, t0, t1, k=8):
-    """Pick the steadiest, sharpest frame with a clear face in [t0, t1] (avoids blinks/motion/odd angles)."""
+def sample_frames(ctx, t0, t1, fps=2.0):
+    """One decode pass: reframed output frames every 1/fps s over [t0, t1] (source time)."""
     import cv2
+    sw, sh, plan = ctx["sw"], ctx["sh"], ctx["plan"]
+    out = []
+    crop_w = int(round(sh * 1080 / 1920 / 2) * 2)
+    for k, fr in enumerate(reframe.read_frames(ctx["src"], t0, t1 - t0, sw, sh, fps)):
+        t = t0 + k / fps
+        if plan is None or crop_w >= sw:
+            o = reframe.letterbox(fr, 1080, 1920)
+        else:
+            xs, afps = plan
+            j = min(len(xs) - 1, max(0, int((t - ctx["clip_start"]) * afps)))
+            x = int(round(xs[j]))
+            o = cv2.resize(fr[:, x:x + crop_w], (1080, 1920), interpolation=cv2.INTER_AREA)
+        out.append((t, o))
+    return out
+
+def _zoom_box(b, z, cy=0.42, w=1080, h=1920):
+    if z <= 1.001:
+        return b
+    x0 = (w - w / z) / 2
+    y0 = min(h - h / z, max(0, cy * h - (h / z) * cy))
+    return ((b[0] - x0) * z, (b[1] - y0) * z, (b[2] - x0) * z, (b[3] - y0) * z)
+
+def _ensure_samples(ctx, items):
+    if "samples" not in ctx:
+        srcs = [it for it in items if it["kind"] == "src"]
+        t0 = min([it["s"] for it in srcs] + [it.get("window", (it.get("at", 1e9),))[0] for it in items if it["kind"] == "hold"])
+        t1 = max([it["e"] for it in srcs] + [it.get("window", (0, it.get("at", 0)))[-1] for it in items if it["kind"] == "hold"])
+        sm = sample_frames(ctx, max(0.0, t0), t1 + 0.5)
+        ctx["samples"] = [(t, fr, faces_in(fr)) for t, fr in sm]
+    return ctx["samples"]
+
+def _nearest(samples, t):
+    return min(samples, key=lambda x: abs(x[0] - t)) if samples else None
+
+def best_hold_frame(ctx, t0, t1, items=()):
+    """Steadiest, sharpest sample with a clear, centred face in [t0, t1] (avoids blinks/motion/odd angles)."""
+    import cv2
+    sm = _ensure_samples(ctx, items)
     best, best_s = None, -1e9
-    for i in range(k):
-        t = t0 + (t1 - t0) * (i + 0.5) / k
-        frs = _frame_at(ctx, t, 3)
-        if len(frs) < 2:
+    for i, (t, fr, fs) in enumerate(sm):
+        if not (t0 <= t <= t1):
             continue
-        fr = frs[0]
-        g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-        sharp = cv2.Laplacian(cv2.resize(g, (360, 640)), cv2.CV_64F).var()
-        motion = float(np.mean(cv2.absdiff(g, cv2.cvtColor(frs[-1], cv2.COLOR_BGR2GRAY))))
-        fs = faces_in(fr)
+        g = cv2.cvtColor(cv2.resize(fr, (360, 640)), cv2.COLOR_BGR2GRAY)
+        sharp = cv2.Laplacian(g, cv2.CV_64F).var()
+        nb = sm[i + 1][1] if i + 1 < len(sm) else sm[i - 1][1]
+        motion = float(np.mean(cv2.absdiff(g, cv2.cvtColor(cv2.resize(nb, (360, 640)), cv2.COLOR_BGR2GRAY))))
         face = max(((b[2] - b[0]) * (b[3] - b[1]) for b in fs), default=0) / (1080 * 1920)
         centred = max((1 - abs((b[0] + b[2]) / 2 - 540) / 540 for b in fs), default=0)
         score = (3.0 if fs else 0) + min(face * 20, 2) + centred + min(sharp / 300, 1.5) - motion / 4
         if score > best_s:
-            best, best_s = (t, fr), score
-    return best
+            best, best_s = t, score
+    if best is None:
+        return None
+    fr = _frame_at(ctx, best)  # full-quality frame for the hold
+    return (best, fr[0]) if fr else None
 
 def face_track(ctx, items, fx, step=0.5):
-    """[(t_out, [boxes])] sampled every `step` s of output time (after zoom), used to keep text off faces."""
+    """[(t_out, [boxes])] every `step` s of output time (after zoom), from one 2 fps decode pass."""
+    sm = _ensure_samples(ctx, items)
     out, t_out = [], 0.0
     for it in items:
         dur = it["dur"] if it["kind"] == "hold" else it["e"] - it["s"]
-        k = 0.0
-        while k < dur:
-            if it["kind"] == "hold":
-                fr = it.get("frame")
-                if fr is None:
-                    fr = (_frame_at(ctx, it["at"]) or [None])[0]
-            else:
-                fr = (_frame_at(ctx, it["s"] + k) or [None])[0]
-            if fr is not None:
-                z = zoom_at(t_out + k, fx)
-                bx = faces_in(apply_zoom(fr, z))
-                out.append((t_out + k, bx))
-            k += step if it["kind"] == "src" else max(step, dur)
+        if it["kind"] == "hold":
+            fr = it.get("frame")
+            boxes = faces_in(fr) if fr is not None else (_nearest(sm, it["at"]) or (0, 0, []))[2]
+            out.append((t_out, [_zoom_box(b, zoom_at(t_out, fx)) for b in boxes]))
+            out.append((t_out + dur, out[-1][1]))
+        else:
+            k = 0.0
+            while k < dur:
+                n = _nearest(sm, it["s"] + k)
+                if n:
+                    z = zoom_at(t_out + k, fx)
+                    out.append((t_out + k, [_zoom_box(b, z) for b in n[2]]))
+                k += step
         t_out += dur
     return out
 
 def pick_holds(ctx, items):
     for it in items:
         if it["kind"] == "hold" and it.get("window") and it.get("frame") is None:
-            b = best_hold_frame(ctx, *it["window"])
+            b = best_hold_frame(ctx, *it["window"], items=items)
             if b:
                 it["at"], it["frame"] = b
 
