@@ -96,6 +96,17 @@ Words:
 {lines}
 """
 
+def _with_deadline(fn, seconds):
+    """Hard wall-clock cap: requests' timeout is per read, so a trickling server could hang a render."""
+    import concurrent.futures as cf
+    ex = cf.ThreadPoolExecutor(1)
+    try:
+        return ex.submit(fn).result(timeout=seconds)
+    except cf.TimeoutError:
+        raise RuntimeError(f"LLM call exceeded {seconds}s")
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+
 def llm_plan(words, a, b, title):
     from .clipselect import llm_chat, parse_json
     dur = words[b]["e"] - words[a]["s"]
@@ -105,7 +116,7 @@ def llm_plan(words, a, b, title):
     msgs = [{"role": "user", "content": p}]
     for extra in ({"reasoning_effort": "low"}, {"thinking": {"type": "disabled"}}):
         try:
-            return parse_json(llm_chat(msgs, max_tokens=6000, extra=extra))
+            return parse_json(_with_deadline(lambda: llm_chat(msgs, max_tokens=6000, timeout=60, extra=extra), 120))
         except Exception as e:  # noqa: BLE001 - retry once, then fall back to rules only
             log(f"  edit LLM failed ({e})")
     return {}

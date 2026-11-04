@@ -51,12 +51,17 @@ def read_frames(src, start, dur, w, h, fps=None):
                           "-vf", vf, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL)  # we may stop reading early (cut segments)
     n = w * h * 3
-    while True:
-        b = p.stdout.read(n)
-        if len(b) < n:
-            break
-        yield np.frombuffer(b, np.uint8).reshape(h, w, 3)
-    p.wait()
+    try:
+        while True:
+            b = p.stdout.read(n)
+            if len(b) < n:
+                break
+            yield np.frombuffer(b, np.uint8).reshape(h, w, 3)
+    finally:  # also runs when the consumer stops early (cut segments, held frames)
+        if p.poll() is None:
+            p.kill()
+        p.stdout.close()
+        p.wait()
 
 def audio_env(src, start, dur, fps):
     pcm = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{start}", "-t", f"{dur}", "-i", str(src), "-vn",

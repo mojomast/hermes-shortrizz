@@ -52,6 +52,8 @@ def _frames_exact(gen, n, fallback):
             break
         last = fr; k += 1
         yield fr
+    if hasattr(gen, "close"):
+        gen.close()
     while k < n:  # pad to the exact count so audio and video stay in sync over many cuts
         k += 1
         yield last
@@ -218,7 +220,8 @@ def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, refram
             if it.get("frame") is None:
                 g = reframe.render_frames(src, it["at"], 0.2, sw, sh, fps, analysis=plan,
                                           t_offset=it["at"] - clip_start)
-                it["frame"] = next(iter(g), last)
+                it["frame"] = next(g, last)
+                g.close()  # stop the reader ffmpeg instead of leaving it blocked on a full pipe
             frames = (it["frame"] for _ in range(n))
         for fr in frames:
             t = nfr / fps
