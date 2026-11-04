@@ -173,10 +173,36 @@ def test_hook_avoids_face():
     y, band = E.hook_y([(0.0, [face]), (1.0, [face]), (2.0, [face])], 2.8)
     default = max(int(1920 * 0.21), E.SAFE["top"] + 110)
     h = band[1] - band[0]
-    cost = lambda top: E._weighted_overlap(top + h / 2, h / 2, [face])
-    assert cost(y) < cost(default)                   # moved to cover less of the eyes/mouth
-    small = (300, 700, 780, 1150)                    # face lower in frame: default spot is already clear
-    assert E.hook_y([(0.0, [small])], 2.8)[0] == default
+    hb = E.head_box(face)
+    cost = lambda top: max(0.0, min(top + h, hb[3]) - max(top, hb[1]))
+    assert cost(y) <= cost(default)                  # never worse than the usual spot
+    assert E.SAFE["top"] <= y and y + h <= E.SAFE["bottom_y"] - 200
+    low = (300, 900, 780, 1200)                      # head well below the usual spot: keep it
+    assert E.hook_y([(0.0, [low])], 2.8)[0] == default
+
+def test_hook_avoids_hair_and_side_of_face():
+    face = (360, 640, 720, 1000)                     # eyes clear of the usual spot, but hair/forehead are under it
+    hb = E.head_box(face)
+    y, (y0, y1) = E.hook_y([(0.0, [face])], 2.8)
+    default = max(int(1920 * 0.21), E.SAFE["top"] + 110)
+    over = lambda a, b: max(0.0, min(b, hb[3]) - max(a, hb[1]))
+    assert over(default, default + (y1 - y0)) > 0     # old rule would have kept it on the hair
+    assert over(y0, y1) < over(default, default + (y1 - y0))
+    assert E.SAFE["top"] <= y0 and y1 <= E.SAFE["bottom_y"] - 200
+    assert hb[0] < face[0] and hb[2] > face[2] and hb[1] < face[1]   # sides and hair included
+
+def test_end_card_hides_live_captions():
+    from shortrizz import captions
+    st = captions.load_style("hormozi")
+    words = [{"w": f"w{i}", "s": i * 0.4, "e": i * 0.4 + 0.35} for i in range(30)]
+    ovl = [{"text": "FOLLOW FOR MORE", "t0": 9.0, "t1": 12.0, "pos": "middle"}]
+    ass = captions.build_ass(words, 0.0, 12.0, st, overlays=ovl)
+    t = lambda x: sum(float(p) * m for p, m in zip(x.split(":"), (3600, 60, 1)))
+    for line in ass.splitlines():
+        if ",Cap," in line:
+            s0, e0 = line.split(",")[1:3]
+            assert t(e0) <= 9.0 + 1e-6 or t(s0) >= 12.0, line
+    assert any(",Hook," in l and "FOLLOW" in l for l in ass.splitlines())
     y2, _ = E.hook_y([(0.0, [])], 2.8)
     assert y2 == max(int(1920 * 0.21), E.SAFE["top"] + 110)
 

@@ -123,6 +123,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     ws = merge_number_tokens([w for w in words if w["e"] > clip_start and w["s"] < clip_end])
     cyc = st.get("highlight_cycle") or [st["highlight"]]
     y_default = y
+    # the end card / narrator CTA replaces the live captions while it is on screen (never stacked on them)
+    cards = [(o["t0"], o["t1"]) for o in overlays or [] if o.get("pos") == "middle"]
     for pi, pg in enumerate(pages(ws, st["max_words"])):
         hl = cyc[pi % len(cyc)]
         if y_at is not None:  # face-aware: one position per caption page
@@ -154,5 +156,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             fit = min(1.0, (W - 140) / max(1, chars * st.get("char_w", 0.42) * st["size"] * st["pop"] / 100))
             fs = f"\\fs{int(st['size'] * fit)}" if fit < 1 else ""
             intro = "\\fad(40,0)" if k == 0 else ""
-            ev.append(f"Dialogue: 0,{ts(s)},{ts(max(e, s + 0.05))},Cap,,0,0,0,,{{\\an5\\pos({x},{y}){fs}{intro}}}{txt}")
+            e = max(e, s + 0.05)
+            for c0, c1 in cards:
+                if s < c1 and e > c0:
+                    e = c0 if s < c0 else s
+            if e - s < 0.05:
+                continue
+            ev.append(f"Dialogue: 0,{ts(s)},{ts(e)},Cap,,0,0,0,,{{\\an5\\pos({x},{y}){fs}{intro}}}{txt}")
     return hdr + "\n".join(ev + overlay_events(overlays, W, H)) + "\n"

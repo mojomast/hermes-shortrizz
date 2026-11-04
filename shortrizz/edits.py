@@ -622,23 +622,28 @@ def caption_y_fn(track, base_y, size, hook_until=0.0, hook_band=None):
         return min(zone_y, key=lambda z: min(abs(z[0] - mid), abs(z[1] - mid)))[2]
     return y_at
 
+def head_box(b):
+    """Face box grown to the whole head: hair above, ears/side of the face, chin below."""
+    w, h = b[2] - b[0], b[3] - b[1]
+    return (b[0] - 0.25 * w, b[1] - 0.6 * h, b[2] + 0.25 * w, b[3] + 0.15 * h)
+
 def hook_y(track, until, lines=2, size=110):
-    """Top y for the hook text in the first `until` s: the top safe spot unless it covers the eyes/mouth,
-    then just under the top safe line or below the chin. Returns (y_top, band) where band=(y0, y1)."""
+    """Top y for the hook text in the first `until` s. Tries the usual top spot, just under the top safe
+    line, below the head, and lower alternate spots, and picks the one covering the least of any head
+    (forehead, hair and sides included). Returns (y_top, band) where band=(y0, y1)."""
     h = lines * size * 1.05 + 30
-    boxes = [b for t, bx in track if t <= until for b in bx if (b[2] - b[0]) > 90]
+    boxes = [head_box(b) for t, bx in track if t <= until for b in bx if (b[2] - b[0]) > 90]
     base = max(int(1920 * 0.21), SAFE["top"] + 110)
     if not boxes:
         return base, (base, base + h)
-    fy0 = sorted(b[1] for b in boxes)[len(boxes) // 2]
-    fy1 = sorted(b[3] for b in boxes)[len(boxes) // 2]
-    cands = [base, SAFE["top"] + 12, int(fy1 + 24)]
-    cands = [c for c in cands if SAFE["top"] <= c and c + h <= SAFE["bottom_y"] - 200] or [base]
-    cost = lambda y: sum(_weighted_overlap(y + h / 2, h / 2, [b]) for b in boxes)
-    eyes = lambda y: sum(max(0.0, min(y + h, b[3]) - max(y, b[1] + 0.25 * (b[3] - b[1]))) for b in boxes)
-    if eyes(base) == 0:          # over hair/forehead only: keep the usual spot
+    lim = SAFE["bottom_y"] - 200          # leave room for the caption line under it
+    hy1 = sorted(b[3] for b in boxes)[len(boxes) // 2]
+    cands = [base, SAFE["top"] + 12, int(hy1 + 24), int(lim - h)] + list(range(SAFE["top"] + 12, int(lim - h), 60))
+    cands = [c for c in cands if SAFE["top"] <= c and c + h <= lim] or [base]
+    cost = lambda y: sum(max(0.0, min(y + h, b[3]) - max(y, b[1])) for b in boxes)
+    if cost(base) == 0:
         return base, (base, base + h)
-    y = int(min(cands, key=lambda c: (cost(c), abs(c - base))))
+    y = int(min(cands, key=lambda c: (round(cost(c)), abs(c - base))))
     return y, (y, y + h)
 
 # emoji spots inside the safe zones, tried at full then smaller size, corners last
