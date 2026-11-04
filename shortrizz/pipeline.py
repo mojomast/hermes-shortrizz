@@ -45,9 +45,13 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
             track = render.face_track(ctx, items, fx)
             base_y = min(int(1920 * style["pos_y"]), int(captions.SAFE_BOTTOM_Y - style["size"] * 0.6))
             hook_until = max((o["t1"] for o in ovl if o.get("pos") == "top"), default=0.0)
-            y_at = edits.caption_y_fn(track, base_y, style["size"], hook_until)
+            band = None
+            for o in ovl:
+                if o.get("pos") == "top":
+                    o["y"], band = edits.hook_y(track, o["t1"])
+            y_at = edits.caption_y_fn(track, base_y, style["size"], hook_until, band)
             if fx.get("emoji"):
-                fx["emoji_places"] = edits.emoji_places(track, fx["emoji"], y_at)
+                fx["emoji_places"] = edits.emoji_places(track, fx["emoji"], y_at, hook_band=band, hook_until=hook_until)
                 edit_report["emoji"] = [e for (t0, e) in fx["emoji"] if fx["emoji_places"].get(t0)]
             moved = sum(1 for t, _ in track if y_at(t, t) != base_y)
             edit_report["caption_moves"] = moved
@@ -81,7 +85,7 @@ def write_outputs(out, meta, doc, results, schedule=None, every_hours=24):
 
 def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DEFAULT_CACHE, model="small",
          language=None, reframe="auto", use_llm=True, fresh=False, preset="medium", schedule=None,
-         every_hours=24, keep_ass=False, watermark=None, edits=None):
+         every_hours=24, keep_ass=False, watermark=None, edits=None, exclude=None, avoid_previous=False):
     t0 = time.time()
     out = Path(out).expanduser().resolve(); out.mkdir(parents=True, exist_ok=True)
     cache = Path(cache).expanduser(); cache.mkdir(parents=True, exist_ok=True)
@@ -101,8 +105,14 @@ def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DE
     total = ffprobe_duration(src)
     mx = min(max_len, total); mn = min(min_len, mx)
     prog("select")
+    used_file = cache / f"{Path(src).stem}.used.json"
+    ex = previous_ranges(exclude or [], used_file if avoid_previous else None)
+    if ex:
+        log(f"avoiding {len(ex)} range(s) used by earlier runs")
     clips = clipselect.select(tr, count, mn, mx, meta.get("title", ""), use_llm=use_llm,
-                              cache_file=None if fresh else cache / f"{Path(src).stem}.picks.{count}-{mn:g}-{mx:g}.{_tr_hash(tr)}.json")
+                              cache_file=None if fresh else cache / f"{Path(src).stem}.picks.{count}-{mn:g}-{mx:g}.{_tr_hash(tr)}.json",
+                              exclude=ex)
+    _record_used(used_file, clips, out)
     timings["select"] = time.time() - t0 - sum(timings.values())
     log(f"selected {len(clips)} clip(s)")
     eo = {**_edit_opts(edits), "min_len": mn, "max_len": mx}
@@ -118,6 +128,28 @@ def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DE
     prog("done", len(results), len(results), out_dir=str(out))
     log(f"done in {time.time() - t0:.0f}s -> {out}/index.html")
     return doc
+
+def previous_ranges(paths, used_file=None):
+    """Source ranges from earlier runs: clips.json files or run dirs, plus the cache's used-ranges log."""
+    out = []
+    for p in paths:
+        p = Path(p).expanduser()
+        f = p / "clips.json" if p.is_dir() else p
+        if f.exists():
+            out += [(c["start"], c["end"]) for c in json.loads(f.read_text()).get("clips", [])]
+    if used_file and Path(used_file).exists():
+        out += [tuple(r[:2]) for r in json.loads(Path(used_file).read_text())]
+    return sorted(set((round(a, 2), round(b, 2)) for a, b in out))
+
+def _record_used(used_file, clips, out):
+    """Append this run's picks to CACHE/<video>.used.json so --avoid-previous can skip them next time."""
+    try:
+        prev = json.loads(used_file.read_text()) if used_file.exists() else []
+        prev = [r for r in prev if len(r) < 3 or r[2] != out.name]
+        prev += [[c["start"], c["end"], out.name] for c in clips]
+        used_file.write_text(json.dumps(prev))
+    except (OSError, ValueError):
+        pass
 
 def _edit_opts(cli):
     from . import edits

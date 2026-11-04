@@ -115,9 +115,11 @@ class EmojiPop:
                 continue
             if t0 <= t < t0 + 1.2:
                 s = 0.6 + 0.4 * _ease((t - t0) / 0.12)
+                pl = self.places.get(t0) or (self.x, self.y, arr.shape[1])
+                s *= (pl[2] if len(pl) > 2 else arr.shape[1]) / arr.shape[1]
                 a = cv2.resize(arr, (max(2, int(arr.shape[1] * s)), max(2, int(arr.shape[0] * s))))
                 h, w = a.shape[:2]
-                px, py = self.places.get(t0, (self.x, self.y))
+                px, py = pl[0], pl[1]
                 x0, y0 = int(px - w / 2), int(py - h / 2)
                 roi = fr[y0:y0 + h, x0:x0 + w].astype(np.float32)
                 al = a[:, :, 3:4] / 255.0

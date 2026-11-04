@@ -405,6 +405,29 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
     body = lambda sg: sum(e - s for s, e in sg)
     extras = lambda: (intro_d + 0.2 if intro_d else 0) + cold_d + (outro_d + 0.4 if outro_d else 0)
     trimmed_end = None
+    # keep >= 70% of the runtime on the speaker: tight clips / big extras auto-skip narrator lines
+    # (unless the user explicitly asked for them) and shorten the cold open
+    explicit = set(opts.get("explicit") or [])
+    tight = (opts.get("max_len") or 1e9) <= 35
+    auto_skipped = []
+    spk = lambda: (budget - extras()) / max(1e-6, budget)
+    for what in ("outro", "intro", "cold"):
+        if spk() >= 0.70 and not tight:
+            break
+        if what == "outro" and outro_d and "tts_outro" not in explicit:
+            outro_d = None; auto_skipped.append("tts_outro")
+        elif what == "intro" and intro_d and "tts_intro" not in explicit:
+            intro_d = None; auto_skipped.append("tts_intro")
+        elif what == "cold" and cold and cold_d > 2.6:
+            c0, c1 = cold["w0"], cold["w1"]
+            while c1 > c0 + 2 and words[c1]["e"] - words[c0]["s"] > 2.5:
+                c1 -= 1
+            cold = {**cold, "w1": c1, "text": _txt(words, c0, c1)}
+            cold_d = words[c1]["e"] + 0.10 - max(0.0, words[c0]["s"] - 0.06)
+            auto_skipped.append("cold_open_shortened")
+    if auto_skipped:
+        log(f"  {'tight clip' if tight else 'short budget'}: {', '.join(auto_skipped)} so the speaker keeps "
+            f"{spk():.0%} of the runtime (pass --tts-intro/--tts-outro explicitly to force narrator lines)")
     if body(segs) + extras() > budget + 0.05:
         # give up extras (outro, then intro, then cold open) rather than gut the body below the band
         for k in ("outro", "intro", "cold"):
@@ -483,7 +506,7 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
               "hook_text": edl.get("hook_text") if opts["hook_text"] else None,
               "cold_open": cold["text"] if cold else None, "outro_tts": edl.get("cta") if outro_d else None,
               "trimmed_tail_sec": round(max(0.0, words[b]["e"] - words[trimmed_end]["e"]), 2) if trimmed_end is not None else 0.0,
-              "budget_sec": round(budget, 2),
+              "budget_sec": round(budget, 2), "auto_skipped": auto_skipped,
               "intro_tts": edl.get("intro") if intro_d else None,
               "synthetic_voice": voice, "loop": fx["loop"], "zoom_punches": len(fx["punches"]),
               "emoji": [e[1] for e in fx["emoji"]], "sfx": len(fx["sfx"])}
@@ -524,48 +547,121 @@ def _faces_between(track, t0, t1):
     bx = [b for t, boxes in track if t0 - 0.5 <= t <= t1 + 0.25 for b in boxes]
     return bx
 
-def caption_y_fn(track, base_y, size, hook_until=0.0):
-    """Caption centre y per page: keep the default unless it overlaps a face, then go below the chin
-    (if still above the bottom safe line) or above the forehead (below the top safe zone / hook)."""
+def _weighted_overlap(y, half, boxes):
+    """Overlap of a text band [y-half, y+half] with faces: eyes-to-chin counts fully, forehead/hair 30%."""
+    tot = 0.0
+    for b in boxes:
+        h = b[3] - b[1]
+        for y0, y1, wt in ((b[1] - 0.35 * h, b[1] + 0.25 * h, 0.3), (b[1] + 0.25 * h, b[3] + 10, 1.0)):
+            tot += wt * max(0.0, min(y + half, y1) - max(y - half, y0))
+    return tot
+
+def _shots(track, min_len=3.0):
+    """Split the face track into shots (face appears/disappears or jumps) and merge shots < min_len."""
+    def key(boxes):
+        big = [b for b in boxes if (b[2] - b[0]) > 90]
+        if not big:
+            return None
+        b = max(big, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+        return ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, b[3] - b[1])
+    shots = []
+    for t, boxes in track:
+        k = key(boxes)
+        cur = shots[-1] if shots else None
+        same = cur is not None and ((k is None) == (cur["k"] is None)) and (
+            k is None or (abs(k[0] - cur["k"][0]) < 0.25 * cur["k"][2] + 60 and abs(k[2] - cur["k"][2]) < 0.3 * cur["k"][2]))
+        if same:
+            cur["t1"] = t; cur["samples"].append(boxes)
+        else:
+            shots.append({"t0": t, "t1": t, "k": k, "samples": [boxes]})
+    merged = []
+    for sh in shots:
+        if merged and (sh["t1"] - sh["t0"] < min_len):
+            merged[-1]["t1"] = sh["t1"]; merged[-1]["samples"] += sh["samples"]
+        else:
+            merged.append(sh)
+    return merged
+
+def caption_y_fn(track, base_y, size, hook_until=0.0, hook_band=None):
+    """Caption centre y per page. One zone per shot (default / below the chin / above the eyes), chosen by
+    total face overlap across the shot, so captions don't jump between forehead and chest on close-ups.
+    A new zone is taken only when it beats the current one clearly (hysteresis) or the shot really changes."""
     half = size * 0.62
-    lo_lim = SAFE["bottom_y"] - half            # lowest allowed centre
-    def overlap(y, boxes):
-        """Weighted overlap: eyes-to-chin counts fully, forehead/hair only 30%."""
-        tot = 0.0
-        for b in boxes:
-            h = b[3] - b[1]
-            bands = ((b[1] - 0.35 * h, b[1] + 0.25 * h, 0.3), (b[1] + 0.25 * h, b[3] + 10, 1.0))
-            for y0, y1, wt in bands:
-                tot += wt * max(0.0, min(y + half, y1) - max(y - half, y0))
-        return tot
+    lo_lim = SAFE["bottom_y"] - half
+    top_lim_base = SAFE["top"] + half + 40
+    shots = _shots(track)
+    zone_y, prev = [], None
+    for sh in shots:
+        boxes = [b for bx in sh["samples"] for b in bx if (b[2] - b[0]) > 90]
+        if not boxes:
+            y = base_y
+        else:
+            fy0 = sorted(b[1] for b in boxes)[len(boxes) // 2]
+            fy1 = sorted(b[3] for b in boxes)[len(boxes) // 2]
+            tl = top_lim_base + (220 if sh["t0"] < hook_until else 0)
+            cands = {"base": base_y, "below": min(lo_lim, fy1 + half + 24), "above": max(tl, fy0 - half - 24)}
+            cands = {k: min(lo_lim, max(tl, v)) for k, v in cands.items()}
+            n = max(1, len(sh["samples"]))
+            cost = {k: sum(_weighted_overlap(v, half, bx) for bx in sh["samples"]) / n for k, v in cands.items()}
+            if hook_band and sh["t0"] < hook_until:  # never under the hook text
+                for k, v in cands.items():
+                    if v + half > hook_band[0] and v - half < hook_band[1]:
+                        cost[k] += 1e6
+            best = min(cost, key=lambda k: (cost[k], k != "base"))
+            if prev in cost and cost[prev] <= cost[best] + 0.15 * size:  # hysteresis: keep the zone if close
+                best = prev
+            y, prev = int(cands[best]), best
+        zone_y.append((sh["t0"], sh["t1"], y))
     def y_at(t0, t1):
-        boxes = [b for b in _faces_between(track, t0, t1) if (b[2] - b[0]) > 90]
-        if not boxes or overlap(base_y, boxes) == 0:
+        if not zone_y:
             return base_y
-        top_lim = SAFE["top"] + half + (260 if t0 < hook_until else 40)
-        fy0, fy1 = min(b[1] for b in boxes), max(b[3] for b in boxes)
-        cands = [base_y, min(lo_lim, fy1 + half + 24), max(top_lim, fy0 - half - 24)]
-        cands = [min(lo_lim, max(top_lim, c)) for c in cands]
-        return int(min(cands, key=lambda c: (overlap(c, boxes), abs(c - base_y))))
+        mid = (t0 + t1) / 2
+        for a_, b_, y in zone_y:
+            if a_ - 0.25 <= mid <= b_ + 0.25:
+                return y
+        return min(zone_y, key=lambda z: min(abs(z[0] - mid), abs(z[1] - mid)))[2]
     return y_at
 
-EMOJI_SPOTS = [(250, 660), (830 - 75, 660), (250, 880), (830 - 75, 880), (540, 560)]
+def hook_y(track, until, lines=2, size=110):
+    """Top y for the hook text in the first `until` s: the top safe spot unless it covers the eyes/mouth,
+    then just under the top safe line or below the chin. Returns (y_top, band) where band=(y0, y1)."""
+    h = lines * size * 1.05 + 30
+    boxes = [b for t, bx in track if t <= until for b in bx if (b[2] - b[0]) > 90]
+    base = max(int(1920 * 0.21), SAFE["top"] + 110)
+    if not boxes:
+        return base, (base, base + h)
+    fy0 = sorted(b[1] for b in boxes)[len(boxes) // 2]
+    fy1 = sorted(b[3] for b in boxes)[len(boxes) // 2]
+    cands = [base, SAFE["top"] + 12, int(fy1 + 24)]
+    cands = [c for c in cands if SAFE["top"] <= c and c + h <= SAFE["bottom_y"] - 200] or [base]
+    cost = lambda y: sum(_weighted_overlap(y + h / 2, h / 2, [b]) for b in boxes)
+    eyes = lambda y: sum(max(0.0, min(y + h, b[3]) - max(y, b[1] + 0.25 * (b[3] - b[1]))) for b in boxes)
+    if eyes(base) == 0:          # over hair/forehead only: keep the usual spot
+        return base, (base, base + h)
+    y = int(min(cands, key=lambda c: (cost(c), abs(c - base))))
+    return y, (y, y + h)
 
-def emoji_places(track, items, cap_y_fn, size=150):
-    """Choose, for each emoji pop, the first spot that clears every face box and the caption line."""
+# emoji spots inside the safe zones, tried at full then smaller size, corners last
+EMOJI_SPOTS = [(250, 660), (755, 660), (250, 880), (755, 880), (540, 560), (220, 1040), (790, 1040),
+               (200, 400), (810, 400), (540, 345), (140, 700), (140, 900), (900, 700), (900, 900)]
+EMOJI_SIZES = (150, 110, 84)
+
+def emoji_places(track, items, cap_y_fn, size=150, hook_band=None, hook_until=0.0):
+    """For each emoji pop, the first (spot, size) that clears every face box, the caption line and the
+    hook text. Falls back to smaller sizes and corner spots; only skips when nothing fits."""
     out = {}
     for t0, _ in items:
         boxes = _faces_between(track, t0, t0 + 1.2)
         cy = cap_y_fn(t0, t0 + 1.2) if cap_y_fn else 1160
-        def clear(p):
+        def clear(p, sz):
             x, y = p
-            r = (x - size / 2 - 12, y - size / 2 - 12, x + size / 2 + 12, y + size / 2 + 12)
+            r = (x - sz / 2 - 10, y - sz / 2 - 10, x + sz / 2 + 10, y + sz / 2 + 10)
+            if r[0] < SAFE["left"] - 60 or r[2] > 1080 - SAFE["right"] + 60 or r[1] < SAFE["top"] or r[3] > SAFE["bottom_y"]:
+                return False
             if r[3] > cy - 80 and r[1] < cy + 80:
                 return False
+            if hook_band and t0 < hook_until and r[3] > hook_band[0] and r[1] < hook_band[1]:
+                return False
             return not any(r[0] < b[2] and b[0] < r[2] and r[1] < b[3] and b[1] < r[3] for b in boxes)
-        spot = next((p for p in EMOJI_SPOTS if clear(p)), None)
-        if spot is not None:
-            out[t0] = spot
-        else:
-            out[t0] = None   # no clean spot: skip this emoji rather than cover a face
+        out[t0] = next(((x, y, sz) for sz in EMOJI_SIZES for (x, y) in EMOJI_SPOTS if clear((x, y), sz)), None)
     return out

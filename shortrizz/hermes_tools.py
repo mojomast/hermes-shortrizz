@@ -201,6 +201,8 @@ def make_shorts_tool(params=None, **_kw) -> str:
         argv += _edit_argv(a)
         if a.get("length") == "tight":
             argv += ["--length", "tight"]
+        if a.get("avoid_previous"):
+            argv.append("--avoid-previous")
     except ValueError as e:
         return _err(str(e))
     if a.get("cache_dir"):
@@ -347,6 +349,7 @@ def tool_specs() -> list[dict]:
           "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo watermark. Omit to use the user's setting (off by default)."},
           "cache_dir": {"type": "string", "description": "Download/transcript cache. Default ~/.cache/shortrizz."},
           "length": {"type": "string", "enum": ["default", "tight"], "description": "tight = 20-35 s clips."},
+          "avoid_previous": {"type": "boolean", "description": "Skip moments earlier runs on this video already used."},
           **_EDIT_PARAMS, "wait_seconds": _WAIT}, ["source"]),
         ("shortrizz_status", status_tool, "⏳",
          "Progress or result of a Shortrizz job. When done returns clip paths, titles, virality scores, "

@@ -166,7 +166,8 @@ def clean_tags(tags, limit=8):
     return out[:limit]
 
 # ---------------------------------------------------------------- main
-def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None):
+def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None, exclude=()):
+    """exclude: [(start, end)] source ranges used by earlier runs; overlapping candidates are skipped."""
     words = all_words(tr)
     cands, method = [], "heuristic"
     if use_llm and cache_file and Path(cache_file).exists():
@@ -193,6 +194,8 @@ def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None):
         s, e = words[a]["s"], words[b]["e"]
         if any(s < p["end"] and e > p["start"] for p in picked):
             continue
+        if any(s < xe and e > xs for xs, xe in exclude):
+            continue
         if not sane_clip(words[a:b + 1], c.get("title", "")):
             log(f"  skipping degenerate candidate {c.get('title', '')[:40]!r}")
             continue
@@ -209,6 +212,8 @@ def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None):
             if len(picked) >= count:
                 break
             if any(c["start"] < p["end"] and c["end"] > p["start"] for p in picked):
+                continue
+            if any(c["start"] < xe and c["end"] > xs for xs, xe in exclude):
                 continue
             sn = snap(words, c["start"], c["end"], mn, mx); a, b = sn
             if not sane_clip(words[a:b + 1], c["title"]):

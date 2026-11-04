@@ -32,6 +32,7 @@ def _edits(a):
     keys = ["edit", "enabled", "llm_edits", "hook_text", "loudnorm", "cold_open", "tts_intro", "tts_outro", "zoom",
             "loop", "emoji", "sfx"]
     d = {k: getattr(a, k) for k in keys}
+    d["explicit"] = [k for k in keys if getattr(a, k) is not None]  # flags the user typed (beat auto rules)
     if a.all_fx:
         for k in ["cold_open", "tts_intro", "tts_outro", "zoom", "loop", "emoji", "sfx"]:
             d[k] = True if d[k] is None else d[k]
@@ -66,6 +67,10 @@ def main(argv=None):
     p.add_argument("--count", type=int, default=5)
     p.add_argument("--min", type=float, default=30, help="min clip length (s)")
     p.add_argument("--max", type=float, default=60, help="max clip length (s)")
+    p.add_argument("--exclude", action="append", default=[], metavar="RUN_DIR|clips.json",
+                   help="skip moments already used by this earlier run (repeatable)")
+    p.add_argument("--avoid-previous", action="store_true",
+                   help="skip moments picked by earlier runs on the same video (from the cache)")
     p.add_argument("--length", choices=["default", "tight"], default="default",
                    help="tight = 20-35 s clips (overrides --min/--max)")
     p.add_argument("--style", default="hormozi", help="hormozi | mrbeast | abdaal | path/to/style.json")
@@ -88,7 +93,7 @@ def main(argv=None):
     doc = pipeline.make(a.source, a.out, a.count, a.min, a.max, a.style, a.cache, a.model, a.language, a.reframe,
                         not a.no_llm, a.fresh, a.preset, a.schedule.split(",") if a.schedule else None,
                         a.every_hours, a.keep_ass, watermark=a.watermark,
-                        edits=_edits(a))
+                        edits=_edits(a), exclude=a.exclude, avoid_previous=a.avoid_previous)
     if a.json:
         print(json.dumps(pipeline.summary(doc), indent=2))
 

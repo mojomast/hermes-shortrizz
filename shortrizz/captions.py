@@ -86,7 +86,7 @@ def overlay_events(overlays, W=1080, H=1920):
         per_line = max(len(txt) / 2, max(len(x) for x in txt.split())) if len(txt) > 13 else len(txt)
         size = int(max(72, min(132, (W - 120 - 192 - 40) / max(1, per_line * 0.58))))
         y = int(H * 0.21) if o.get("pos", "top") == "top" else int(H * 0.50)
-        y = max(y, SAFE_TOP + 110)
+        y = o.get("y", max(y, SAFE_TOP + 110))  # face-aware hook position from the pipeline
         fade = "\\fad(120,180)"
         ev.append(f"Dialogue: 1,{ts(o['t0'])},{ts(o['t1'])},Hook,,120,192,0,,{{\\an8\\pos({(W + 120 - 192) // 2},{y}){fade}\\fs{size}}}{txt}")
     return ev

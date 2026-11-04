@@ -47,12 +47,12 @@ def test_length_budget_trims_body(monkeypatch, tmp_path):
     from shortrizz import tts
     monkeypatch.setattr(tts, "speak", lambda text, wav, speed=1.1: 3.0)
     monkeypatch.setattr(E, "speech_mask", lambda *a, **k: None)
-    opts = {**E.DEFAULTS, **{k: True for k in E.OPT_INS}, "loop": False, "max_len": 35, "min_len": 20}
+    opts = {**E.DEFAULTS, **{k: True for k in E.OPT_INS}, "loop": False, "max_len": 40, "min_len": 30}
     edl = {"gap_policy": E.PRESETS["normal"], "drop": [], "intro": "a narrator line", "cta": "Follow",
            "cold_open": {"w0": 20, "w1": 27, "text": "x"}, "hook_text": "Hook", "emphasis": [], "emoji": []}
     items, cw, ovl, fx, rep, total = E.assemble("x.mp4", ws, clip, edl, opts, captions.load_style("hormozi"),
                                                 tmp_path, "c")
-    assert total <= 35.05 and total <= clip["end"] - clip["start"]
+    assert total <= 40.05 and total <= clip["end"] - clip["start"]
     assert rep["trimmed_tail_sec"] > 0 and rep["intro_tts"] and rep["cold_open"]
     assert ws[[w for w in cw if "i" in w][-1]["i"]]["w"].endswith(".")        # body ends on a sentence
 
@@ -73,7 +73,7 @@ def test_emoji_avoids_face():
     face = (120, 500, 520, 1000)                                    # covers the default upper-left spot
     track = [(t * 0.5, [face]) for t in range(10)]
     places = E.emoji_places(track, [(1.0, "🔥")], lambda a, b: 1160)
-    x, y = places[1.0]
+    x, y, sz = places[1.0]
     assert not (face[0] < x < face[2] and face[1] < y < face[3])
     full = [(t * 0.5, [(0, 0, 1080, 1920)]) for t in range(10)]
     assert E.emoji_places(full, [(1.0, "🔥")], lambda a, b: 1160)[1.0] is None   # skip, never cover
@@ -108,3 +108,84 @@ def test_caption_prefers_forehead_over_mouth_on_closeups():
     face = (248, 386, 842, 1178)                                    # real close-up from the S79 demo
     y = E.caption_y_fn([(0.0, [face]), (0.5, [face])], base, st["size"])(0.0, 0.5)
     assert y < face[1] + 0.25 * (face[3] - face[1])                 # above the eyes, not on the mouth
+
+def _tight_setup(monkeypatch):
+    ws = seq(" ".join(f"word{i}." if i % 8 == 7 else f"word{i}" for i in range(100)), step=0.3)  # ~30 s
+    clip = {"start": 0.0, "end": ws[-1]["e"], "word_range": [0, len(ws) - 1], "title": "t"}
+    from shortrizz import tts
+    monkeypatch.setattr(tts, "speak", lambda text, wav, speed=1.1: 3.0)
+    monkeypatch.setattr(E, "speech_mask", lambda *a, **k: None)
+    edl = {"gap_policy": E.PRESETS["normal"], "drop": [], "intro": "a narrator line", "cta": "Follow",
+           "cold_open": {"w0": 20, "w1": 33, "text": "x"}, "hook_text": "Hook", "emphasis": [], "emoji": []}
+    return ws, clip, edl
+
+# 1a. tight + all-fx keeps the speaker on screen >= 70%; explicit --tts-intro still forces it
+def test_tight_allfx_skips_narrator_unless_explicit(monkeypatch, tmp_path):
+    ws, clip, edl = _tight_setup(monkeypatch)
+    st = captions.load_style("hormozi")
+    opts = {**E.DEFAULTS, **{k: True for k in E.OPT_INS}, "loop": False, "max_len": 35, "min_len": 20}
+    *_, rep, total = E.assemble("x.mp4", ws, clip, edl, opts, st, tmp_path, "c")
+    assert not rep["intro_tts"] and not rep["outro_tts"] and "tts_intro" in rep["auto_skipped"]
+    assert rep["kept_sec"] / total >= 0.70
+    forced = {**opts, "explicit": ["tts_intro"]}
+    *_, rep2, _ = E.assemble("x.mp4", ws, clip, edl, forced, st, tmp_path, "c")
+    assert rep2["intro_tts"] and not rep2["outro_tts"]
+
+# 1b. a second run on the same video avoids the first run's moments
+def test_exclude_previous_ranges(tmp_path):
+    from shortrizz import pipeline
+    words = seq(" ".join(f"w{i}." if i % 6 == 5 else f"w{i}" for i in range(900)), step=0.3)
+    tr = {"segments": [{"s": 0, "e": words[-1]["e"], "text": " ".join(w["w"] for w in words), "words": words}]}
+    first = clipselect.select(tr, 3, 20, 35, use_llm=False)
+    run = tmp_path / "run1"; run.mkdir()
+    (run / "clips.json").write_text(json.dumps({"clips": first}))
+    used = tmp_path / "v.used.json"
+    pipeline._record_used(used, first, run)
+    ex = pipeline.previous_ranges([run], used)
+    second = clipselect.select(tr, 3, 20, 35, use_llm=False, exclude=ex)
+    assert second and not any(a["start"] < b["end"] and a["end"] > b["start"] for a in second for b in first)
+    p = argparse.ArgumentParser()
+    seen = {}
+    from shortrizz import pipeline as P
+    import pytest
+    mp = pytest.MonkeyPatch(); mp.setattr(P, "make", lambda *a, **k: seen.update(k) or {"clips": []})
+    cli.main(["v.mp4", "--avoid-previous", "--exclude", str(run)]); mp.undo()
+    assert seen["avoid_previous"] and seen["exclude"] == [str(run)]
+
+
+# 1d. captions keep one zone per shot on a jittering close-up (no forehead/chest jumping)
+def test_caption_zone_is_stable_on_closeups():
+    st = captions.load_style("hormozi")
+    base = min(int(1920 * st["pos_y"]), int(captions.SAFE_BOTTOM_Y - st["size"] * 0.6))
+    import random
+    random.seed(1)
+    track = []
+    for k in range(40):  # 20 s close-up whose box wobbles +-40 px
+        d = random.randint(-40, 40)
+        track.append((k * 0.5, [(250 + d, 420 + d, 830 + d, 1180 + d)]))
+    fn = E.caption_y_fn(track, base, st["size"])
+    ys = {fn(t, t + 0.8) for t in [x * 0.7 for x in range(25)]}
+    assert len(ys) == 1
+
+# 1c. hook text moves off a face that covers its usual top spot
+def test_hook_avoids_face():
+    face = (250, 330, 830, 1000)
+    y, band = E.hook_y([(0.0, [face]), (1.0, [face]), (2.0, [face])], 2.8)
+    default = max(int(1920 * 0.21), E.SAFE["top"] + 110)
+    h = band[1] - band[0]
+    cost = lambda top: E._weighted_overlap(top + h / 2, h / 2, [face])
+    assert cost(y) < cost(default)                   # moved to cover less of the eyes/mouth
+    small = (300, 700, 780, 1150)                    # face lower in frame: default spot is already clear
+    assert E.hook_y([(0.0, [small])], 2.8)[0] == default
+    y2, _ = E.hook_y([(0.0, [])], 2.8)
+    assert y2 == max(int(1920 * 0.21), E.SAFE["top"] + 110)
+
+# 1e. emoji fall back to smaller sizes / corners before skipping
+def test_emoji_uses_fallback_spots():
+    face = (200, 450, 880, 1100)                    # big centred face: the 150 px mid spots are blocked
+    track = [(t * 0.5, [face]) for t in range(10)]
+    pl = E.emoji_places(track, [(1.0, "🔥")], lambda a, b: 1160)[1.0]
+    assert pl is not None
+    x, y, sz = pl
+    assert E.SAFE["top"] <= y - sz / 2 and y + sz / 2 <= E.SAFE["bottom_y"]
+    assert not (face[0] < x < face[2] and face[1] < y < face[3])
