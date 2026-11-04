@@ -19,7 +19,7 @@ class Progress:
                                          "elapsed_sec": round(time.time() - self.t0, 1), **extra}))
 
 def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset="medium", keep_ass=False,
-                 progress=None):
+                 progress=None, watermark=None):
     style = captions.load_style(style_name)
     results = []
     for i, c in enumerate(clips, 1):
@@ -30,14 +30,16 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
         ass = out / f"{name}.ass"
         ass.write_text(captions.build_ass(words, c["start"], c["end"], style))
         mp4 = out / f"{name}.mp4"
-        info = render.render_clip(src, c["start"], c["end"], ass, mp4, reframe_mode, preset=preset)
+        info = render.render_clip(src, c["start"], c["end"], ass, mp4, reframe_mode, preset=preset,
+                                  watermark=watermark)
         render.thumbnail(mp4, out / f"{name}.jpg", min(1.5, (c["end"] - c["start"]) / 2))
         if not keep_ass:
             ass.unlink()
         a_, b_ = c["word_range"]
+        c = {**c, "hashtags": clipselect.clean_tags(c.get("hashtags"))}
         results.append({**c, "file": mp4.name, "thumb": f"{name}.jpg", "duration": round(c["end"] - c["start"], 2),
                         "transcript": " ".join(w["w"] for w in words[a_:b_ + 1]), "style": style_name,
-                        "reframe": info["reframe"]})
+                        "reframe": info["reframe"], "watermark": info["watermark"]})
     return results
 
 def write_outputs(out, meta, doc, results, schedule=None, every_hours=24):
@@ -48,12 +50,14 @@ def write_outputs(out, meta, doc, results, schedule=None, every_hours=24):
 
 def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DEFAULT_CACHE, model="small",
          language=None, reframe="auto", use_llm=True, fresh=False, preset="medium", schedule=None,
-         every_hours=24, keep_ass=False):
+         every_hours=24, keep_ass=False, watermark=None):
     t0 = time.time()
     out = Path(out).expanduser().resolve(); out.mkdir(parents=True, exist_ok=True)
     cache = Path(cache).expanduser(); cache.mkdir(parents=True, exist_ok=True)
     prog = Progress(out)
     captions.load_style(style)  # fail fast on a bad style
+    from .watermark import settings as wm_settings
+    wm = wm_settings(watermark)
     prog("download")
     src, meta = download.fetch(source, cache)
     timings = {"download": time.time() - t0}
@@ -70,19 +74,20 @@ def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DE
                               cache_file=None if fresh else cache / f"{Path(src).stem}.picks.{count}-{mn:g}-{mx:g}.json")
     timings["select"] = time.time() - t0 - sum(timings.values())
     log(f"selected {len(clips)} clip(s)")
-    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog)
+    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm)
     timings["render"] = time.time() - t0 - sum(timings.values())
     meta["video_path"] = str(src)
     doc = {"tool": "shortrizz", "out_dir": str(out), "source": meta, "source_duration": round(total, 1),
            "settings": {"count": count, "min": min_len, "max": max_len, "style": style, "model": model,
-                        "llm": use_llm, "reframe": reframe, "cache": str(cache)},
+                        "llm": use_llm, "reframe": reframe, "cache": str(cache),
+                        "watermark": wm["watermark"]},
            "timings_sec": {k: round(v, 1) for k, v in timings.items()}, "clips": results}
     write_outputs(out, meta, doc, results, schedule, every_hours)
     prog("done", len(results), len(results), out_dir=str(out))
     log(f"done in {time.time() - t0:.0f}s -> {out}/index.html")
     return doc
 
-def restyle(run_dir, style, out=None, reframe=None, preset="medium"):
+def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=None):
     """Re-render the clips of an earlier run with another caption style (no download/transcribe/LLM)."""
     t0 = time.time()
     run_dir = Path(run_dir).expanduser().resolve()
@@ -99,8 +104,11 @@ def restyle(run_dir, style, out=None, reframe=None, preset="medium"):
     for c, p in zip(clips, prev["clips"]):
         c["word_range"] = _word_range(words, p["start"], p["end"])
     prog = Progress(out)
-    results = render_clips(src, words, clips, out, style, reframe, preset, progress=prog)
-    doc = {**prev, "settings": {**prev["settings"], "style": style, "reframe": reframe},
+    from .watermark import settings as wm_settings
+    wm = wm_settings(watermark)
+    results = render_clips(src, words, clips, out, style, reframe, preset, progress=prog, watermark=wm)
+    doc = {**prev, "settings": {**prev["settings"], "style": style, "reframe": reframe,
+                                                 "watermark": wm["watermark"]},
            "timings_sec": {"render": round(time.time() - t0, 1)}, "clips": results, "restyled_from": str(run_dir),
            "out_dir": str(out)}
     write_outputs(out, prev["source"], doc, results)

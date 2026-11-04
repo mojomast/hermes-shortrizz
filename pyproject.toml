@@ -33,4 +33,4 @@ include = ["shortrizz*"]
 exclude = ["tests*", "docs*"]
 
 [tool.setuptools.package-data]
-shortrizz = ["assets/*.svg"]
+shortrizz = ["assets/*.svg", "assets/*.png"]

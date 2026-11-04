@@ -144,6 +144,15 @@ def heuristic_candidates(tr, n, mn, mx):
             c["virality_score"] = int(40 + 50 * c["raw"] / hi)
     return out
 
+def clean_tags(tags, limit=8):
+    """'#tag' form, no spaces, de-duplicated case-insensitively, at most `limit`."""
+    out, seen = [], set()
+    for t in tags or []:
+        t = "#" + re.sub(r"[^\w]", "", str(t).lstrip("#"))
+        if len(t) > 1 and t.lower() not in seen:
+            seen.add(t.lower()); out.append(t)
+    return out[:limit]
+
 # ---------------------------------------------------------------- main
 def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None):
     words = all_words(tr)
@@ -172,7 +181,7 @@ def select(tr, count, mn, mx, title="", use_llm=True, cache_file=None):
         s, e = words[a]["s"], words[b]["e"]
         if any(s < p["end"] and e > p["start"] for p in picked):
             continue
-        tags = [t if t.startswith("#") else "#" + t for t in c.get("hashtags", [])]
+        tags = clean_tags(c.get("hashtags", []))
         picked.append({"start": round(max(0, s - 0.08), 2), "end": round(e + 0.25, 2),
                        "title": c.get("title", "Clip").strip(), "virality_score": int(c.get("virality_score", 50)),
                        "why_it_hooks": c.get("why_it_hooks", ""), "caption": c.get("caption", ""),

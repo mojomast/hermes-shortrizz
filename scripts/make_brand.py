@@ -31,18 +31,54 @@ GRAD = """<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>"""
 
-def tile(x=4, y=4):
-    # 9:16 phone, a face-ish dot, a caption bar with a yellow active word, play notch
+# Final mark ("sliced play"): a 9:16 phone card with a rounded play button, cut by one diagonal
+# slice; the lower piece slides along the cut. It reads as "a clip cut out of a video".
+# 120-unit grid; the slice gap is 6 units so it still shows at 32 px.
+CARD = "M48 18 H72 A12 12 0 0 1 84 30 V90 A12 12 0 0 1 72 102 H48 A12 12 0 0 1 36 90 V30 A12 12 0 0 1 48 18 Z"
+PLAY = "M52 45.5 Q52 41 56 43.3 L73 53.4 Q76.8 55.7 73 58 L56 68.1 Q52 70.4 52 65.9 Z"
+# cut line y = 98 - 0.5x clips the foot of the play button; half gap 3
+TOP = "M0 0 H120 V35 L0 95 Z"
+BOT = "M0 101 L120 41 V120 H0 Z"
+SHIFT = "translate(3.2 1.6)"   # lower piece drops off the cut
+
+def _defs(uid):
+    return (f'<clipPath id="{uid}t"><path d="{TOP}"/></clipPath>'
+            f'<clipPath id="{uid}b"><path d="{BOT}"/></clipPath>')
+
+def _pieces(uid, card_fill, play_fill=None, knockout=False):
+    def body():
+        if knockout:
+            return f'<path fill-rule="evenodd" fill="{card_fill}" d="{CARD} {PLAY}"/>'
+        return f'<path fill="{card_fill}" d="{CARD}"/><path fill="{play_fill}" d="{PLAY}"/>'
+    return (f'<g clip-path="url(#{uid}t)">{body()}</g>'
+            f'<g transform="{SHIFT}"><g clip-path="url(#{uid}b)">{body()}</g></g>')
+
+def tile(x=4, y=4, uid="k"):
     return f"""<g transform="translate({x - 4} {y - 4})">
+  <defs>{_defs(uid)}</defs>
   <rect x="4" y="4" width="112" height="112" rx="28" fill="url(#g)"/>
   <rect x="4" y="4" width="112" height="56" rx="28" fill="url(#s)"/>
-  <rect x="39" y="18" width="42" height="84" rx="9" fill="none" stroke="#ffffff" stroke-width="5.5"/>
-  <circle cx="60" cy="44" r="8" fill="#ffffff" opacity="0.9"/>
-  <rect x="45" y="64" width="13" height="8" rx="3" fill="#ffffff"/>
-  <rect x="60" y="64" width="16" height="8" rx="3" fill="#ffe500"/>
-  <rect x="49" y="76" width="22" height="6" rx="3" fill="#ffffff" opacity="0.6"/>
-  <path d="M16 46 h14 M12 60 h18 M18 74 h12" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.75"/>
+  {_pieces(uid, "#ffffff", "url(#g)")}
 </g>"""
+
+def mono_mark(color, uid="mm"):
+    """Single-colour mark (no tile) for watermarks: play knocked out of the sliced card."""
+    return f'<defs>{_defs(uid)}</defs>' + _pieces(uid, color, knockout=True)
+
+def mono_logo(color, wordmark=True):
+    d, w = text_path("Shortrizz", 86)
+    W = int(140 + w + 12) if wordmark else 120
+    word = f'<g transform="translate(140 91)" fill="{color}"><path d="{d}"/></g>' if wordmark else ""
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="120" viewBox="0 0 {W} 120" role="img" aria-label="Shortrizz">
+  {mono_mark(color)}{word}
+</svg>
+"""
+
+def icon(size_label="app"):
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" role="img" aria-label="Shortrizz">
+  <defs>{GRAD}</defs>{tile()}
+</svg>
+"""
 
 def logo(fill):
     d, w = text_path("Shortrizz", 86)
@@ -72,7 +108,7 @@ def banner():
   </defs>
   <rect width="1280" height="640" fill="#0b1020"/>
   <rect width="1280" height="640" fill="url(#glow)"/>
-  <g transform="translate(72 150) scale(1.1)">{tile()}</g>
+  <g transform="translate(72 150) scale(1.1)">{tile(uid="bn")}</g>
   <g transform="translate(240 252)" fill="#ffffff"><path d="{d}"/></g>
   <g transform="translate(76 360)" fill="#ffffff" opacity="0.92"><path d="{t1}"/></g>
   <g transform="translate(78 410)" fill="#a5b4fc"><path d="{t2}"/></g>
@@ -93,7 +129,25 @@ def main():
     (OUT / "logo-dark.svg").write_text(logo("#ffffff"))
     (OUT / "logo-light.svg").write_text(logo("#0b1020"))
     (OUT / "banner.template.svg").write_text(banner())
+    (OUT / "logo-mono-white.svg").write_text(mono_logo("#ffffff"))
+    (OUT / "logo-mono-dark.svg").write_text(mono_logo("#0b1020"))
+    (OUT / "mark-mono-white.svg").write_text(mono_logo("#ffffff", wordmark=False))
+    (OUT / "icon.svg").write_text(icon())
     import cairosvg
+    # video watermark assets (white, transparent) shipped inside the package
+    pkg = OUT.parents[1] / "shortrizz" / "assets"
+    pkg.mkdir(parents=True, exist_ok=True)
+    wm = mono_logo("#ffffff")
+    cairosvg.svg2png(bytestring=wm.encode(), write_to=str(pkg / "watermark.png"), output_height=96)
+    d, w = text_path("made with", 30, 0)
+    full_w = int(140 + text_path("Shortrizz", 86)[1] + 12)
+    made = wm.replace('height="120" viewBox="0 0 %d 120"' % full_w, 'height="160" viewBox="0 -40 %d 160"' % full_w).replace(
+        "</svg>", f'<g transform="translate(142 -6)" fill="#ffffff" opacity="0.85"><path d="{d}"/></g></svg>')
+    cairosvg.svg2png(bytestring=made.encode(), write_to=str(pkg / "watermark-madewith.png"), output_height=128)
+    for px in (32, 512):
+        cairosvg.svg2png(url=str(OUT / "icon.svg"), write_to=str(OUT / f"icon-{px}.png"), output_width=px)
+    for name in ("logo-mono-white", "logo-mono-dark"):
+        cairosvg.svg2png(url=str(OUT / f"{name}.svg"), write_to=str(OUT / f"{name}.png"), output_height=240)
     for name in ("logo-dark", "logo-light"):
         cairosvg.svg2png(url=str(OUT / f"{name}.svg"), write_to=str(OUT / f"{name}.png"), output_height=240)
     if thumbs:

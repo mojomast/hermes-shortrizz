@@ -193,6 +193,10 @@ def make_shorts_tool(params=None, **_kw) -> str:
             "--reframe", reframe, "--model", model, "--json"]
     if a.get("use_llm") is False:
         argv.append("--no-llm")
+    if a.get("watermark") is True:
+        argv.append("--watermark")
+    elif a.get("watermark") is False:
+        argv.append("--no-watermark")
     if a.get("cache_dir"):
         argv += ["--cache", str(Path(a["cache_dir"]).expanduser())]
     out = (out or _runs_dir() / f"run-{time.strftime('%Y%m%d-%H%M%S')}").resolve()
@@ -241,6 +245,10 @@ def render_style_tool(params=None, **_kw) -> str:
         return _err(str(e))
     out = Path(a["out_dir"]).expanduser().resolve() if a.get("out_dir") else run.resolve().parent / f"{run.name}-{Path(style).stem}"
     argv = ["restyle", str(run.resolve()), "--style", style, "--out", str(out)] + (["--reframe", reframe] if reframe else [])
+    if a.get("watermark") is True:
+        argv.append("--watermark")
+    elif a.get("watermark") is False:
+        argv.append("--no-watermark")
     st = _wait(_start_job("restyle", argv, out), wait)
     return _out(st)
 
@@ -291,6 +299,7 @@ def tool_specs() -> list[dict]:
           "model": {"type": "string", "description": "faster-whisper size. Default small."},
           "use_llm": {"type": "boolean", "description": "false = heuristic picks only. Default true."},
           "out_dir": {"type": "string", "description": "Output folder. Default ~/shortrizz-runs/run-<time>."},
+          "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo watermark. Omit to use the user's setting (off by default)."},
           "cache_dir": {"type": "string", "description": "Download/transcript cache. Default ~/.cache/shortrizz."},
           "wait_seconds": _WAIT}, ["source"]),
         ("shortrizz_status", status_tool, "⏳",
@@ -304,6 +313,7 @@ def tool_specs() -> list[dict]:
          "Background job; returns job_id.",
          {"run_dir": {"type": "string", "description": "Folder of a finished run (has clips.json)."},
           "style": style, "reframe": {"type": "string", "enum": list(REFRAMES)},
+          "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo watermark. Omit to use the user's setting (off by default)."},
           "out_dir": {"type": "string"}, "wait_seconds": _WAIT}, ["run_dir", "style"]),
         ("shortrizz_publish_plan", publish_plan_tool, "🗓️",
          "Dry run: write publish_plan.json scheduling a run's clips to YouTube Shorts / TikTok / Instagram "

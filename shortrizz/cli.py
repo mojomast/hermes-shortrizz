@@ -2,6 +2,12 @@ import argparse, json, sys
 from pathlib import Path
 from . import pipeline, publish, captions
 
+def _wm_flags(p):
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--watermark", dest="watermark", action="store_const", const=True, default=None,
+                   help="burn in the Shortrizz watermark (default off; see SHORTRIZZ_WATERMARK / config)")
+    g.add_argument("--no-watermark", dest="watermark", action="store_const", const=False)
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "publish":
@@ -18,8 +24,9 @@ def main(argv=None):
         p = argparse.ArgumentParser(prog="shortrizz restyle", description="Re-render a run with another style.")
         p.add_argument("run_dir"); p.add_argument("--style", required=True); p.add_argument("--out")
         p.add_argument("--reframe", choices=["auto", "face", "center", "letterbox"])
+        _wm_flags(p)
         a = p.parse_args(argv[1:])
-        doc = pipeline.restyle(a.run_dir, a.style, a.out, a.reframe)
+        doc = pipeline.restyle(a.run_dir, a.style, a.out, a.reframe, watermark=a.watermark)
         print(json.dumps(pipeline.summary(doc), indent=2))
         return
     if argv and argv[0] == "styles":
@@ -43,10 +50,11 @@ def main(argv=None):
     p.add_argument("--every-hours", type=float, default=24)
     p.add_argument("--keep-ass", action="store_true")
     p.add_argument("--json", action="store_true", help="print a JSON summary on stdout when done")
+    _wm_flags(p)
     a = p.parse_args(argv)
     doc = pipeline.make(a.source, a.out, a.count, a.min, a.max, a.style, a.cache, a.model, a.language, a.reframe,
                         not a.no_llm, a.fresh, a.preset, a.schedule.split(",") if a.schedule else None,
-                        a.every_hours, a.keep_ass)
+                        a.every_hours, a.keep_ass, watermark=a.watermark)
     if a.json:
         print(json.dumps(pipeline.summary(doc), indent=2))
 

@@ -64,6 +64,7 @@ captions in the Hormozi, MrBeast or Abdaal style. You can use it as a CLI or as 
 - **Posting plan.** A pluggable `publish` interface for YouTube, TikTok and Instagram. Live posting is
   deliberately not implemented, so it only writes a plan.
 - **Hermes plugin.** Five tools and an agent skill. Long renders run as background jobs.
+- **Optional watermark.** A small Shortrizz logo in a corner, off by default. See [Watermark](#watermark-off-by-default).
 
 ## Quickstart
 
@@ -86,7 +87,8 @@ The YuNet face model (230 KB) and the Whisper weights download on first use to `
 shortrizz SOURCE [--count 5] [--min 30] [--max 60] [--style hormozi|mrbeast|abdaal|my.json]
                  [--out DIR] [--model small] [--language en] [--reframe auto|face|center|letterbox]
                  [--no-llm] [--fresh] [--preset medium] [--schedule youtube,tiktok,instagram] [--json]
-shortrizz restyle RUN_DIR --style mrbeast [--out DIR]     # re-render a finished run with another style
+                 [--watermark | --no-watermark]
+shortrizz restyle RUN_DIR --style mrbeast [--out DIR] [--watermark]  # re-render a finished run with another style
 shortrizz publish RUN_DIR [--platforms youtube,tiktok]    # write publish_plan.json (dry run)
 shortrizz styles                                          # list presets
 ```
@@ -112,7 +114,7 @@ hermes plugins doctor shortrizz
 
 | Tool | Job |
 |---|---|
-| `shortrizz_make_shorts` | Starts a job for `source` with `count`, `min_seconds`, `max_seconds`, `style`, `reframe`, `model`, `use_llm`, `out_dir` and `wait_seconds`. Returns a `job_id` and `out_dir`. |
+| `shortrizz_make_shorts` | Starts a job for `source` with `count`, `min_seconds`, `max_seconds`, `style`, `reframe`, `model`, `use_llm`, `watermark`, `out_dir` and `wait_seconds`. Returns a `job_id` and `out_dir`. |
 | `shortrizz_status` | Reports a job's progress (download, transcribe, select, render n/total). When the job is done, it returns the clip paths, titles, scores, durations, why-it-hooks notes and captions. `cancel: true` stops the job. |
 | `shortrizz_list_styles` | Lists the caption presets and reframe modes. |
 | `shortrizz_render_style` | Re-renders a finished `run_dir` in another `style`, without downloading, transcribing or calling the LLM again. Runs as a background job. |
@@ -122,6 +124,27 @@ hermes plugins doctor shortrizz
 progress in `out_dir/progress.json`. A tool call returns right away, or after `wait_seconds` (at most 280 s,
 which keeps it under Hermes' tool timeout). The agent polls `shortrizz_status` until the job is done. On a failed
 job, `log_tail` holds the last lines of the job log. Loading the plugin doesn't import OpenCV or Whisper.
+
+## Watermark (off by default)
+
+Shortrizz can burn in a small white watermark: the Shortrizz mark and wordmark, with an optional "made with"
+line. It sits in the top-right corner, below the platform's top bar. That keeps it clear of the captions in
+the lower middle and of the face, which the reframer keeps centred. It is **off unless you turn it on**.
+
+The first of these that is set wins:
+
+1. `--watermark` or `--no-watermark` on the command line, or the `watermark` parameter of the Hermes tools
+2. the `SHORTRIZZ_WATERMARK` environment variable, set to `1` or `0`
+3. a user config file at `~/.config/shortrizz/config.json`, or wherever `$SHORTRIZZ_CONFIG` points. This file
+   is never part of the repo:
+   ```json
+   {"watermark": true, "watermark_position": "top-right", "watermark_opacity": 0.72,
+    "watermark_width": 0.26, "watermark_text": false}
+   ```
+
+`watermark_position` can be `top-right`, `top-left`, `bottom-right` or `bottom-left`. `watermark_width` is a
+fraction of the frame width. `watermark_text` adds the "made with" line. Each of these can also be set as an
+environment variable, `SHORTRIZZ_WATERMARK_<KEY>`.
 
 ## Caption styles
 
@@ -188,6 +211,23 @@ run took about 5.5 minutes. A restyle takes about 2 minutes.
 - Clips can run about 0.3 s past `--max` because of the padding at the end.
 - Live posting isn't implemented. `shortrizz/publish.py` documents the YouTube Data API, the TikTok Content
   Posting API and the Instagram Graph API hooks.
+
+## Brand
+
+<img src="docs/media/icon-512.png" alt="Shortrizz app icon" width="96" align="left">
+
+The mark is a 9:16 phone with a play button, cut by one diagonal slice: a clip cut out of a long video. It is
+a sibling of the Comfyrizz tile, with the same rounded gradient square and gloss, recoloured violet to pink to
+amber. Every asset is a hand-authored vector with the text converted to outlines:
+
+- `logo-light.svg` and `logo-dark.svg`
+- `logo-mono-white.svg` and `logo-mono-dark.svg`
+- `icon.svg`
+- `banner.png`
+
+`scripts/make_brand.py` regenerates all of them, along with the watermark PNGs.
+
+<br clear="left">
 
 ## Development
 

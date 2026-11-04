@@ -101,3 +101,7 @@ def test_snap_without_punctuation_keeps_distinct_clips():
     assert a and b and a != b
     assert abs(words[a[0]]["s"] - 20) <= 4 and abs(words[b[0]]["s"] - 100) <= 4
     assert words[a[0]]["ss"] and words[b[1]]["se"]
+
+def test_clean_tags_dedupes():
+    assert clipselect.clean_tags(["#A", "a", "#B c", "#b c", "x"] + [f"t{i}" for i in range(20)]) == \
+        ["#A", "#Bc", "#x", "#t0", "#t1", "#t2", "#t3", "#t4"]
