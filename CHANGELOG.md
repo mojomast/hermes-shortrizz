@@ -3,8 +3,9 @@
 ## [0.2.1] - 2026-11-04
 
 ### Fixed
+- Clips whose cold open comes from later in the source than the body (common with `--length tight --all-fx`) came out with no audio stream or silent audio. Each kept segment now reads its own copy of the source audio, and every render checks the output: it fails if the audio stream is missing or silent.
 - The end card / narrator CTA no longer overlaps live captions: captions are hidden while it is on screen.
-- Hook text avoids the whole head (hair, forehead and sides of the face, not just eyes and mouth). It tries the usual top spot, just under the top safe line, below the head and lower alternate spots, and picks the least overlap.
+- Hook text avoids the whole head (hair, forehead and sides of the face, not just eyes and mouth). It tries the usual top spot, just under the top safe line, below the head and lower alternate spots, and picks the least overlap, weighting eyes-to-chin heaviest. The hook's height comes from the actual hook text.
 
 ## [0.2.0] - 2026-11-04
 
