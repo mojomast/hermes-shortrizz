@@ -166,14 +166,6 @@ def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
     cache.write_text(json.dumps(tr, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
     return tr
 
-def _json_default(o):
-    """numpy scalars/arrays (e.g. numpy.bool_ from quality checks) -> plain Python."""
-    if hasattr(o, "tolist"):
-        return o.tolist()
-    if hasattr(o, "item"):
-        return o.item()
-    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
-
 def all_words(tr):
     """Flat word list; marks Whisper segment edges (ss/se) as fallback phrase boundaries."""
     out = []
