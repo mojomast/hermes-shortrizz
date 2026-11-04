@@ -1,0 +1,9 @@
+{
+  "base": "hormozi",
+  "font": "Anton",
+  "size": 124,
+  "highlight": "#00E5FF",
+  "outline_w": 6,
+  "pos_y": 0.62,
+  "max_words": 3
+}

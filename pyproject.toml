@@ -1,0 +1,16 @@
+[project]
+name = "shortsmith"
+version = "0.1.0"
+description = "Self-hosted AI clipper: long video -> captioned 9:16 shorts"
+requires-python = ">=3.10"
+dependencies = ["faster-whisper>=1.0", "opencv-python-headless>=4.8", "numpy", "requests"]
+
+[project.scripts]
+shortsmith = "shortsmith.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["shortsmith"]

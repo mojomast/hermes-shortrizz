@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.egg-info/
+models/
+out/
+shortsmith-out/
+*.mp4
+*.mkv
+*.webm
+*.wav
+*.ass
+.env
+.env.*
+*.token
+*token*.json
+client_secret*.json
+publish_plan.json
