@@ -312,7 +312,7 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
         wav = Path(workdir) / f"{name}.intro.wav"
         d = tts.speak(edl["intro"], wav)
         if d:
-            items.append({"kind": "hold", "dur": d + 0.2, "wav": str(wav), "at": first_t})
+            items.append({"kind": "hold", "dur": d + 0.2, "wav": str(wav), "at": first_t + 0.6})  # tracker settled
             fx["drift"].append((0.0, d + 0.2)); t += d + 0.2; voice = True
             cap_words += _tts_words(edl["intro"], 0.0, d)
     if opts["cold_open"] and edl.get("cold_open"):
@@ -349,7 +349,8 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
                 fx["emoji"].append((pos[e["w"]]["s"], e["emoji"]))
                 if opts["sfx"] and pos[e["w"]]["s"] - last_sfx >= 3.5:
                     fx["sfx"].append((pos[e["w"]]["s"], str(sfxdir / "pop.wav"))); last_sfx = pos[e["w"]]["s"]
-        fx["emoji_y"] = cap_y - style["size"] - 120
+        # upper-left, under the hook text: off the (centred) face and inside the 120 px left safe margin
+        fx["emoji_y"] = 660
     overlays = []
     if opts["hook_text"] and edl.get("hook_text"):
         overlays.append({"text": edl["hook_text"], "t0": 0.0, "t1": min(2.8, t), "pos": "top"})

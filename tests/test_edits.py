@@ -88,3 +88,7 @@ def test_restyle_passes_edit_options(monkeypatch, tmp_path):
     monkeypatch.setattr(P, "write_outputs", lambda *a, **k: None)
     P.restyle(run, "hormozi", tmp_path / "o", edits={"zoom": True})
     assert seen["edit_opts"]["zoom"] and seen["edit_opts"]["enabled"]
+
+def test_number_tokens_glued_in_captions():
+    ws = captions.merge_number_tokens(W([("$3", 0, .2), (",000", .2, .5), ("per", .6, .8)]))
+    assert [w["w"] for w in ws] == ["$3,000", "per"] and ws[0]["e"] == .5

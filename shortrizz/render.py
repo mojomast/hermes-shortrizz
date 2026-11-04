@@ -89,7 +89,7 @@ def apply_zoom(fr, z, cy=0.42):
 class EmojiPop:
     """Colour emoji rendered from the system Noto Color Emoji font (OFL) and popped above the captions."""
     FONT = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
-    def __init__(self, items, y_center, size=170):
+    def __init__(self, items, y_center, size=150, x_center=250):
         from PIL import Image, ImageDraw, ImageFont
         self.items = []
         try:
@@ -105,7 +105,7 @@ class EmojiPop:
             im = im.crop(bb).resize((size, int(size * (bb[3] - bb[1]) / max(1, bb[2] - bb[0]))))
             arr = np.array(im)[:, :, [2, 1, 0, 3]].astype(np.float32)
             self.items.append((t0, arr))
-        self.y = y_center
+        self.y, self.x = y_center, x_center
 
     def apply(self, fr, t):
         import cv2
@@ -114,7 +114,7 @@ class EmojiPop:
                 s = 0.6 + 0.4 * _ease((t - t0) / 0.12)
                 a = cv2.resize(arr, (max(2, int(arr.shape[1] * s)), max(2, int(arr.shape[0] * s))))
                 h, w = a.shape[:2]
-                x0, y0 = (fr.shape[1] - w) // 2, int(self.y - h / 2)
+                x0, y0 = int(self.x - w / 2), int(self.y - h / 2)
                 roi = fr[y0:y0 + h, x0:x0 + w].astype(np.float32)
                 al = a[:, :, 3:4] / 255.0
                 fr = fr.copy() if not fr.flags.writeable else fr
@@ -158,7 +158,7 @@ def _audio_graph(items, xfade, sfx, loop, si=0, base=0.0):
 
 def _measure_loudness(src, inputs, chains, label):
     import re as _re
-    g = ";".join(chains) + f";[{label}]loudnorm=I=-14:TP=-1:LRA=11:print_format=json[o]"
+    g = ";".join(chains) + f";[{label}]loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json[o]"
     cmd = ["ffmpeg", "-hide_banner", "-nostats", *src]
     for x in inputs:
         cmd += ["-i", str(x)]
@@ -182,10 +182,10 @@ def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, refram
     if loudnorm:
         m = _measure_loudness(sin, *ag(0))
         if m and m.get("input_i") not in (None, "-inf"):
-            ln = (f"loudnorm=I=-14:TP=-1:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
+            ln = (f"loudnorm=I=-14:TP=-1.5:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
                   f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
         else:
-            ln = "loudnorm=I=-14:TP=-1:LRA=11"
+            ln = "loudnorm=I=-14:TP=-1.5:LRA=11"
         chains = chains + [f"[{alab}]{ln},aresample=48000[aout]"]
     else:
         chains = chains + [f"[{alab}]anull[aout]"]

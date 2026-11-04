@@ -84,12 +84,22 @@ def overlay_events(overlays, W=1080, H=1920):
         txt = clean(o["text"], True)
         # big: fit on at most two lines inside the safe width (768 px), Poppins Black ~0.62 em per caps glyph
         per_line = max(len(txt) / 2, max(len(x) for x in txt.split())) if len(txt) > 13 else len(txt)
-        size = int(max(64, min(118, (W - 120 - 192 - 40) / max(1, per_line * 0.62))))
+        size = int(max(72, min(132, (W - 120 - 192 - 40) / max(1, per_line * 0.58))))
         y = int(H * 0.21) if o.get("pos", "top") == "top" else int(H * 0.50)
         y = max(y, SAFE_TOP + 110)
         fade = "\\fad(120,180)"
         ev.append(f"Dialogue: 1,{ts(o['t0'])},{ts(o['t1'])},Hook,,120,192,0,,{{\\an8\\pos({(W + 120 - 192) // 2},{y}){fade}\\fs{size}}}{txt}")
     return ev
+
+def merge_number_tokens(ws):
+    """Whisper splits "$3,000" into "$3" + ",000"; glue such pieces back so captions read "$3,000"."""
+    out = []
+    for w in ws:
+        if out and re.match(r"^[,.]\d", w["w"]) and re.search(r"\d$", out[-1]["w"]):
+            out[-1] = {**out[-1], "w": out[-1]["w"] + w["w"], "e": w["e"]}
+        else:
+            out.append(w)
+    return out
 
 def build_ass(words, clip_start, clip_end, style, W=1080, H=1920, overlays=None):
     st = style
@@ -110,7 +120,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     x, y = W // 2, min(int(H * st["pos_y"]), int(SAFE_BOTTOM_Y - st["size"] * 0.6))  # stay above platform UI
     ev = []
-    ws = [w for w in words if w["e"] > clip_start and w["s"] < clip_end]
+    ws = merge_number_tokens([w for w in words if w["e"] > clip_start and w["s"] < clip_end])
     cyc = st.get("highlight_cycle") or [st["highlight"]]
     for pi, pg in enumerate(pages(ws, st["max_words"])):
         hl = cyc[pi % len(cyc)]
