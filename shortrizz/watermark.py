@@ -65,9 +65,10 @@ class Overlay:
         self.a = (img[:, :, 3:4].astype(np.float32) / 255.0) * st["opacity"]
         # soft shadow so a white mark stays readable on bright backgrounds
         self.sh = cv2.GaussianBlur(img[:, :, 3], (0, 0), max(1, w / 120)).astype(np.float32)[..., None] / 255.0 * 0.35 * st["opacity"]
-        m = int(frame_w * 0.045); mt = int(frame_h * 0.06)  # keep below status bar / platform top UI
-        x = frame_w - w - m if st["position"].endswith("right") else m
-        y = mt if st["position"].startswith("top") else frame_h - h - int(frame_h * 0.16)
+        # platform safe zones (scaled from 1080x1920): top 288, right 192, left 120, bottom UI below y=1240
+        sx, sy = frame_w / 1080, frame_h / 1920
+        x = frame_w - w - int(192 * sx) if st["position"].endswith("right") else int(120 * sx)
+        y = int(288 * sy) if st["position"].startswith("top") else int(1240 * sy) - h
         self.box = (y, y + h, x, x + w)
 
     def apply(self, fr):

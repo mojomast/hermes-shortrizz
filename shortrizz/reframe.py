@@ -48,7 +48,8 @@ class Detector:
 def read_frames(src, start, dur, w, h, fps=None):
     vf = f"scale={w}:{h}" + (f",fps={fps}" if fps else "")
     p = subprocess.Popen(["ffmpeg", "-v", "error", "-ss", f"{start}", "-t", f"{dur}", "-i", str(src),
-                          "-vf", vf, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], stdout=subprocess.PIPE)
+                          "-vf", vf, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL)  # we may stop reading early (cut segments)
     n = w * h * 3
     while True:
         b = p.stdout.read(n)
@@ -151,7 +152,7 @@ def plan(tracks, nsteps, fps, scale, sw, sh, crop_w, audio=None, min_shot=3.0, s
         xs.append(float(np.clip(x - crop_w / 2, 0, sw - crop_w)))
     return xs
 
-def render_frames(src, start, dur, sw, sh, fps, out_w=1080, out_h=1920, analysis=None):
+def render_frames(src, start, dur, sw, sh, fps, out_w=1080, out_h=1920, analysis=None, t_offset=0.0):
     """Yield output frames (out_h x out_w BGR). analysis: (xs, afps) or None for letterbox."""
     crop_w = int(round(sh * out_w / out_h / 2) * 2)
     if analysis is None or crop_w >= sw:
@@ -160,7 +161,7 @@ def render_frames(src, start, dur, sw, sh, fps, out_w=1080, out_h=1920, analysis
         return
     xs, afps = analysis
     for k, fr in enumerate(read_frames(src, start, dur, sw, sh)):
-        t = k / fps
+        t = k / fps + t_offset  # t_offset: where this sub-range starts inside the analysed range
         j = min(len(xs) - 1, int(t * afps))
         j2 = min(len(xs) - 1, j + 1)
         a = t * afps - j

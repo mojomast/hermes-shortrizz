@@ -75,7 +75,23 @@ def pages(words, max_words):
             out.append(cur)
     return out
 
-def build_ass(words, clip_start, clip_end, style, W=1080, H=1920):
+SAFE_BOTTOM_Y, SAFE_TOP = 1240, 288   # platform UI covers below ~1240 px and above 288 px (1080x1920)
+
+def overlay_events(overlays, W=1080, H=1920):
+    """Hook text (first 0-3 s, top safe zone, below the watermark) and an end CTA, as ASS events."""
+    ev = []
+    for o in overlays or []:
+        txt = clean(o["text"], True)
+        # big: fit on at most two lines inside the safe width (768 px), Poppins Black ~0.62 em per caps glyph
+        per_line = max(len(txt) / 2, max(len(x) for x in txt.split())) if len(txt) > 13 else len(txt)
+        size = int(max(64, min(118, (W - 120 - 192 - 40) / max(1, per_line * 0.62))))
+        y = int(H * 0.21) if o.get("pos", "top") == "top" else int(H * 0.50)
+        y = max(y, SAFE_TOP + 110)
+        fade = "\\fad(120,180)"
+        ev.append(f"Dialogue: 1,{ts(o['t0'])},{ts(o['t1'])},Hook,,120,192,0,,{{\\an8\\pos({(W + 120 - 192) // 2},{y}){fade}\\fs{size}}}{txt}")
+    return ev
+
+def build_ass(words, clip_start, clip_end, style, W=1080, H=1920, overlays=None):
     st = style
     hdr = f"""[Script Info]
 ScriptType: v4.00+
@@ -86,12 +102,13 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Hook,Poppins Black,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,14,0,8,120,192,0,1
 Style: Cap,{st['font']},{st['size']},{ass_color(st['primary'])},{ass_color(st['highlight'])},{ass_color(st['outline'])},{ass_color(st['back'], 0x60)},{-1 if st['bold'] else 0},0,0,0,100,100,{st['spacing']},0,1,{st['outline_w']},{st['shadow']},5,60,60,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    x, y = W // 2, int(H * st["pos_y"])
+    x, y = W // 2, min(int(H * st["pos_y"]), int(SAFE_BOTTOM_Y - st["size"] * 0.6))  # stay above platform UI
     ev = []
     ws = [w for w in words if w["e"] > clip_start and w["s"] < clip_end]
     cyc = st.get("highlight_cycle") or [st["highlight"]]
@@ -125,4 +142,4 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             fs = f"\\fs{int(st['size'] * fit)}" if fit < 1 else ""
             intro = "\\fad(40,0)" if k == 0 else ""
             ev.append(f"Dialogue: 0,{ts(s)},{ts(max(e, s + 0.05))},Cap,,0,0,0,,{{\\an5\\pos({x},{y}){fs}{intro}}}{txt}")
-    return hdr + "\n".join(ev) + "\n"
+    return hdr + "\n".join(ev + overlay_events(overlays, W, H)) + "\n"

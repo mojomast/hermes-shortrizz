@@ -10,7 +10,8 @@ SR = 16000
 # Settings that stop the classic "I'm I'm I'm" loop: no conditioning on previous (possibly
 # hallucinated) text, temperature fallback when a window's text compresses too well or is
 # low-probability, and dropping hallucinated words inside long silences.
-WHISPER_KW = dict(word_timestamps=True, vad_filter=True, beam_size=5, condition_on_previous_text=False,
+WHISPER_KW = dict(initial_prompt="Umm, let me think like, hmm... Okay, here's what I'm, uh, thinking.",  # filler priming
+                  word_timestamps=True, vad_filter=True, beam_size=5, condition_on_previous_text=False,
                   compression_ratio_threshold=2.2, log_prob_threshold=-1.0, no_speech_threshold=0.6,
                   temperature=(0.0, 0.2, 0.4, 0.6, 0.8), hallucination_silence_threshold=2.0,
                   repetition_penalty=1.05, vad_parameters={"min_silence_duration_ms": 500})

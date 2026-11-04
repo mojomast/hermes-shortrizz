@@ -23,7 +23,7 @@ class Progress:
                                          "elapsed_sec": round(time.time() - self.t0, 1), **extra}))
 
 def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset="medium", keep_ass=False,
-                 progress=None, watermark=None):
+                 progress=None, watermark=None, edit_opts=None, cache=None, tr_hash="", prev_edls=None):
     style = captions.load_style(style_name)
     results = []
     for i, c in enumerate(clips, 1):
@@ -32,18 +32,32 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
         name = f"{i:02d}-{slug(c['title'])}"
         log(f"[{i}/{len(clips)}] {c['start']:.1f}-{c['end']:.1f}s  score {c['virality_score']}  {c['title']}")
         ass = out / f"{name}.ass"
-        ass.write_text(captions.build_ass(words, c["start"], c["end"], style))
         mp4 = out / f"{name}.mp4"
-        info = render.render_clip(src, c["start"], c["end"], ass, mp4, reframe_mode, preset=preset,
-                                  watermark=watermark)
+        edit_report = None
+        if edit_opts and edit_opts.get("enabled", True):
+            from . import edits
+            edl = edits.make_edl(src, words, c, edit_opts, cache, tr_hash, (prev_edls or {}).get(i))
+            (out / f"{name}.edl.json").write_text(json.dumps(edl, indent=1, ensure_ascii=False))
+            items, cw, ovl, fx, edit_report, total = edits.assemble(src, words, c, edl, edit_opts, style, out, name)
+            ass.write_text(captions.build_ass(cw, 0.0, total, style, overlays=ovl))
+            info = render.render_edit(src, c["start"], c["end"], items, ass, mp4, fx, reframe_mode, preset=preset,
+                                      watermark=watermark, loudnorm=edit_opts["loudnorm"])
+            log(f"  edits: -{edit_report['removed_sec']}s, {edit_report['cuts']} cuts, final {edit_report['final_sec']}s")
+            for f in out.glob(f"{name}.*.wav"):
+                f.unlink()
+        else:
+            ass.write_text(captions.build_ass(words, c["start"], c["end"], style))
+            info = render.render_clip(src, c["start"], c["end"], ass, mp4, reframe_mode, preset=preset,
+                                      watermark=watermark)
         render.thumbnail(mp4, out / f"{name}.jpg", min(1.5, (c["end"] - c["start"]) / 2))
         if not keep_ass:
             ass.unlink()
         a_, b_ = c["word_range"]
         c = {**c, "hashtags": clipselect.clean_tags(c.get("hashtags"))}
-        results.append({**c, "file": mp4.name, "thumb": f"{name}.jpg", "duration": round(c["end"] - c["start"], 2),
+        results.append({**c, "file": mp4.name, "thumb": f"{name}.jpg", "duration": edit_report["final_sec"] if edit_report else round(c["end"] - c["start"], 2),
                         "transcript": " ".join(w["w"] for w in words[a_:b_ + 1]), "style": style_name,
-                        "reframe": info["reframe"], "watermark": info["watermark"]})
+                        "reframe": info["reframe"], "watermark": info["watermark"],
+                        **({"edits": edit_report, "edl": f"{name}.edl.json"} if edit_report else {})})
     return results
 
 def write_outputs(out, meta, doc, results, schedule=None, every_hours=24):
@@ -54,7 +68,7 @@ def write_outputs(out, meta, doc, results, schedule=None, every_hours=24):
 
 def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DEFAULT_CACHE, model="small",
          language=None, reframe="auto", use_llm=True, fresh=False, preset="medium", schedule=None,
-         every_hours=24, keep_ass=False, watermark=None):
+         every_hours=24, keep_ass=False, watermark=None, edits=None):
     t0 = time.time()
     out = Path(out).expanduser().resolve(); out.mkdir(parents=True, exist_ok=True)
     cache = Path(cache).expanduser(); cache.mkdir(parents=True, exist_ok=True)
@@ -78,20 +92,29 @@ def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DE
                               cache_file=None if fresh else cache / f"{Path(src).stem}.picks.{count}-{mn:g}-{mx:g}.{_tr_hash(tr)}.json")
     timings["select"] = time.time() - t0 - sum(timings.values())
     log(f"selected {len(clips)} clip(s)")
-    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm)
+    eo = _edit_opts(edits)
+    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm, eo, cache, _tr_hash(tr))
     timings["render"] = time.time() - t0 - sum(timings.values())
     meta["video_path"] = str(src)
     doc = {"tool": "shortrizz", "out_dir": str(out), "source": meta, "source_duration": round(total, 1),
            "settings": {"count": count, "min": min_len, "max": max_len, "style": style, "model": model,
                         "llm": use_llm, "reframe": reframe, "cache": str(cache),
-                        "watermark": wm["watermark"]},
+                        "watermark": wm["watermark"], "edits": eo},
            "timings_sec": {k: round(v, 1) for k, v in timings.items()}, "clips": results}
     write_outputs(out, meta, doc, results, schedule, every_hours)
     prog("done", len(results), len(results), out_dir=str(out))
     log(f"done in {time.time() - t0:.0f}s -> {out}/index.html")
     return doc
 
-def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=None):
+def _edit_opts(cli):
+    from . import edits
+    cli = dict(cli or {})
+    enabled = cli.pop("enabled", None)
+    o = edits.options(cli)
+    o["enabled"] = enabled if enabled is not None else True
+    return o
+
+def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=None, edits=None):
     """Re-render the clips of an earlier run with another caption style (no download/transcribe/LLM)."""
     t0 = time.time()
     run_dir = Path(run_dir).expanduser().resolve()
@@ -112,7 +135,7 @@ def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=N
     wm = wm_settings(watermark)
     results = render_clips(src, words, clips, out, style, reframe, preset, progress=prog, watermark=wm)
     doc = {**prev, "settings": {**prev["settings"], "style": style, "reframe": reframe,
-                                                 "watermark": wm["watermark"]},
+                                                 "watermark": wm["watermark"], "edits": eo},
            "timings_sec": {"render": round(time.time() - t0, 1)}, "clips": results, "restyled_from": str(run_dir),
            "out_dir": str(out)}
     write_outputs(out, prev["source"], doc, results)

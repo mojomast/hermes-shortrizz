@@ -36,7 +36,7 @@ def test_overlay_stays_in_top_right_and_blends():
     st = dict(W.DEFAULTS, watermark=True)
     ov = W.Overlay(1080, 1920, st)
     y0, y1, x0, x1 = ov.box
-    assert x1 <= 1080 and y0 >= 0 and y1 < 1920 * 0.2 and x0 > 540  # top-right, far above captions (0.70 H)
+    assert x1 <= 1080 - 192 and y0 >= 288 and y1 < 1920 * 0.25 and x0 > 540  # top-right inside platform safe zone
     fr = np.zeros((1920, 1080, 3), np.uint8)
     out = ov.apply(fr)
     assert out[y0:y1, x0:x1].max() > 100 and out[1000:, :].max() == 0

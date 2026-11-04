@@ -1,0 +1,1 @@
+pop.wav and whoosh.wav are synthesised by scripts/make_sfx.py for Shortrizz and dedicated to the public domain under CC0 1.0.

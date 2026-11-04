@@ -197,6 +197,12 @@ def make_shorts_tool(params=None, **_kw) -> str:
         argv.append("--watermark")
     elif a.get("watermark") is False:
         argv.append("--no-watermark")
+    try:
+        argv += _edit_argv(a)
+        if a.get("length") == "tight":
+            argv += ["--length", "tight"]
+    except ValueError as e:
+        return _err(str(e))
     if a.get("cache_dir"):
         argv += ["--cache", str(Path(a["cache_dir"]).expanduser())]
     out = (out or _runs_dir() / f"run-{time.strftime('%Y%m%d-%H%M%S')}").resolve()
@@ -206,6 +212,41 @@ def make_shorts_tool(params=None, **_kw) -> str:
     st["note"] = ("First run on a new video downloads and transcribes it (about 1/10 of its length on 8 CPU "
                   "cores), then renders ~25 s per clip. Cached videos only re-render.")
     return _out(st)
+
+
+EDIT_BOOLS = {"deeper_edits": ("--no-edits", None), "llm_edits": ("--no-llm-edits", None),
+              "hook_text": ("--no-hook-text", None), "loudnorm": ("--no-loudnorm", None),
+              "cold_open": (None, "--cold-open"), "tts_intro": (None, "--tts-intro"), "tts_outro": (None, "--tts-outro"),
+              "zoom": (None, "--zoom"), "loop": (None, "--loop"), "emoji": (None, "--emoji"), "sfx": (None, "--sfx")}
+
+def _edit_argv(a):
+    argv = []
+    if a.get("edit") is not None:
+        if a["edit"] not in ("off", "light", "normal", "aggressive"):
+            raise ValueError("edit must be off, light, normal or aggressive")
+        argv += ["--edit", a["edit"]]
+    for k, (off, on) in EDIT_BOOLS.items():
+        if a.get(k) is False and off:
+            argv.append(off)
+        if a.get(k) is True and on:
+            argv.append(on)
+    return argv
+
+_EDIT_PARAMS = {
+    "edit": {"type": "string", "enum": ["off", "light", "normal", "aggressive"],
+             "description": "Dead-air tightening preset. Default normal (gaps >0.35 s shrink to 0.15 s)."},
+    "deeper_edits": {"type": "boolean", "description": "false = plain continuous render (no cuts, hook, loudnorm). Default true."},
+    "llm_edits": {"type": "boolean", "description": "Second LLM pass removing false starts/repeats/fillers. Default true."},
+    "hook_text": {"type": "boolean", "description": "On-screen hook text in the first 3 s. Default true."},
+    "loudnorm": {"type": "boolean", "description": "Two-pass loudness normalise to -14 LUFS. Default true."},
+    "cold_open": {"type": "boolean", "description": "Opt-in: flash the clip's best line first. Default false."},
+    "tts_intro": {"type": "boolean", "description": "Opt-in: AI narrator (Kokoro, stock voice) context line first. Default false."},
+    "tts_outro": {"type": "boolean", "description": "Opt-in: AI narrator call to action at the end. Default false."},
+    "zoom": {"type": "boolean", "description": "Opt-in: punch-in zooms on key words and on jump cuts. Default false."},
+    "loop": {"type": "boolean", "description": "Opt-in: seamless loop ending. Default false."},
+    "emoji": {"type": "boolean", "description": "Opt-in: emoji pops on key words. Default false."},
+    "sfx": {"type": "boolean", "description": "Opt-in: subtle pop/whoosh sound effects (bundled CC0). Default false."},
+}
 
 
 def status_tool(params=None, **_kw) -> str:
@@ -249,6 +290,10 @@ def render_style_tool(params=None, **_kw) -> str:
         argv.append("--watermark")
     elif a.get("watermark") is False:
         argv.append("--no-watermark")
+    try:
+        argv += _edit_argv(a)
+    except ValueError as e:
+        return _err(str(e))
     st = _wait(_start_job("restyle", argv, out), wait)
     return _out(st)
 
@@ -301,7 +346,8 @@ def tool_specs() -> list[dict]:
           "out_dir": {"type": "string", "description": "Output folder. Default ~/shortrizz-runs/run-<time>."},
           "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo watermark. Omit to use the user's setting (off by default)."},
           "cache_dir": {"type": "string", "description": "Download/transcript cache. Default ~/.cache/shortrizz."},
-          "wait_seconds": _WAIT}, ["source"]),
+          "length": {"type": "string", "enum": ["default", "tight"], "description": "tight = 20-35 s clips."},
+          **_EDIT_PARAMS, "wait_seconds": _WAIT}, ["source"]),
         ("shortrizz_status", status_tool, "⏳",
          "Progress or result of a Shortrizz job. When done returns clip paths, titles, virality scores, "
          "durations, why-it-hooks and captions with hashtags.",
@@ -314,7 +360,7 @@ def tool_specs() -> list[dict]:
          {"run_dir": {"type": "string", "description": "Folder of a finished run (has clips.json)."},
           "style": style, "reframe": {"type": "string", "enum": list(REFRAMES)},
           "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo watermark. Omit to use the user's setting (off by default)."},
-          "out_dir": {"type": "string"}, "wait_seconds": _WAIT}, ["run_dir", "style"]),
+          **_EDIT_PARAMS, "out_dir": {"type": "string"}, "wait_seconds": _WAIT}, ["run_dir", "style"]),
         ("shortrizz_publish_plan", publish_plan_tool, "🗓️",
          "Dry run: write publish_plan.json scheduling a run's clips to YouTube Shorts / TikTok / Instagram "
          "Reels. Never uploads.",

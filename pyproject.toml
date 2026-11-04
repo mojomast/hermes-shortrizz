@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tts = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
 dev = ["pytest>=8,<10", "pyyaml>=6,<7"]
 
 [project.urls]
@@ -33,4 +34,4 @@ include = ["shortrizz*"]
 exclude = ["tests*", "docs*"]
 
 [tool.setuptools.package-data]
-shortrizz = ["assets/*.svg", "assets/*.png"]
+shortrizz = ["assets/*.svg", "assets/*.png", "assets/sfx/*"]

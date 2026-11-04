@@ -125,6 +125,40 @@ progress in `out_dir/progress.json`. A tool call returns right away, or after `w
 which keeps it under Hermes' tool timeout). The agent polls `shortrizz_status` until the job is done. On a failed
 job, `log_tail` holds the last lines of the job log. Loading the plugin doesn't import OpenCV or Whisper.
 
+## Deeper edits
+
+Every clip goes through an edit pass before it is rendered. These are **on by default**:
+
+- **Dead-air tightening.** Pauses longer than 0.35 s shrink to about 0.15 s instead of being cut to zero. Cuts keep 0.08 s before a word and up to 0.12 s after it, using the silero-vad model bundled with faster-whisper so trailing consonants are not clipped. Every join gets a 15 ms equal-power audio crossfade. Captions are retimed onto the new timeline. Presets are `--edit off|light|normal|aggressive`.
+- **LLM edit pass.** A second, cheap LLM call returns a word-index EDL: false starts, repeats and fillers to drop, a hook line, emphasis words and more. Code validates the EDL before it is used:
+  - cuts land only on word boundaries;
+  - numbers and negations (not, never, no, n't…) are never dropped;
+  - at most 12% of a clip's words can be removed;
+  - each dropped span is at most 6 words.
+
+  Simple rules catch um/uh and immediate 1–3-word repeats even without the LLM. Whisper is primed with a filler-style prompt so more fillers get transcribed. The EDL is saved as `NAME.edl.json` and in the cache, so `restyle` re-renders without the LLM. Disable the LLM pass with `--no-llm-edits`.
+- **Hook text.** A 2–6-word on-screen hook shows for the first 0–2.8 s, below the top 288 px. Disable it with `--no-hook-text`.
+- **Loudness and safe zones.** Audio gets a two-pass `loudnorm` to −14 LUFS / −1 dBTP and an 80 Hz high-pass (`--no-loudnorm` turns this off). All text stays inside the union of TikTok, Reels and Shorts safe zones:
+  - top 288 px;
+  - captions no lower than y≈1240;
+  - left 120 px and right 192 px.
+
+  The watermark sits inside these zones as well.
+
+These are **opt-in** and default off. Each has a CLI flag, a plugin tool parameter, and a config key in `~/.config/shortrizz/config.json` (for example `"zoom": true`). `--all-fx` turns them all on.
+
+| flag | effect |
+|---|---|
+| `--cold-open` | flashes the clip's most striking 1–3.5 s line first, then a whoosh, then the clip |
+| `--tts-intro` / `--tts-outro` | narrator context line / CTA in a stock Kokoro-82M voice (Apache-2.0 weights via kokoro-onnx, MIT; CPU). Weights download to `~/.cache/shortrizz/kokoro`. It never clones the speaker, and clips are marked `synthetic_voice` in clips.json, so disclose AI voice where platforms require it |
+| `--zoom` | 1.0→1.12 punch-in on emphasis words; alternating 1.0/1.08 scale on jump cuts |
+| `--loop` | ends on the LLM's loop word with no tail or fade, so the replay flows back into the opening (when looping, the CTA is text-only) |
+| `--emoji` | emoji pops above the captions (system Noto Color Emoji font) |
+| `--sfx` | sparse pop/whoosh sounds at −20 dB, no closer than 3.5 s apart. They are synthesised by `scripts/make_sfx.py` and released CC0 (see `assets/sfx/LICENSE.txt`) |
+| `--length tight` | 20–35 s clips |
+
+`--no-edits` gives the old plain render (one continuous range). clips.json reports the edits for each clip: seconds removed, cuts, dropped words, the hook, and the final length. Music beds, B-roll and split-screen are deliberately not built.
+
 ## Watermark (off by default)
 
 Shortrizz can burn in a small white watermark: the Shortrizz mark and wordmark, with an optional "made with"
