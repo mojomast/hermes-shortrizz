@@ -89,7 +89,7 @@ def apply_zoom(fr, z, cy=0.42):
 class EmojiPop:
     """Colour emoji rendered from the system Noto Color Emoji font (OFL) and popped above the captions."""
     FONT = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
-    def __init__(self, items, y_center, size=150, x_center=250):
+    def __init__(self, items, y_center, size=150, x_center=250, places=None):
         from PIL import Image, ImageDraw, ImageFont
         self.items = []
         try:
@@ -106,15 +106,19 @@ class EmojiPop:
             arr = np.array(im)[:, :, [2, 1, 0, 3]].astype(np.float32)
             self.items.append((t0, arr))
         self.y, self.x = y_center, x_center
+        self.places = places or {}  # t0 -> (x, y) chosen off the face
 
     def apply(self, fr, t):
         import cv2
         for t0, arr in self.items:
+            if t0 in self.places and self.places[t0] is None:
+                continue
             if t0 <= t < t0 + 1.2:
                 s = 0.6 + 0.4 * _ease((t - t0) / 0.12)
                 a = cv2.resize(arr, (max(2, int(arr.shape[1] * s)), max(2, int(arr.shape[0] * s))))
                 h, w = a.shape[:2]
-                x0, y0 = int(self.x - w / 2), int(self.y - h / 2)
+                px, py = self.places.get(t0, (self.x, self.y))
+                x0, y0 = int(px - w / 2), int(py - h / 2)
                 roi = fr[y0:y0 + h, x0:x0 + w].astype(np.float32)
                 al = a[:, :, 3:4] / 255.0
                 fr = fr.copy() if not fr.flags.writeable else fr
@@ -167,13 +171,87 @@ def _measure_loudness(src, inputs, chains, label):
     m = _re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", err, _re.S)
     return json.loads(m.group(0)) if m else None
 
-def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, reframe_mode="auto", crf=20,
-                preset="medium", watermark=None, loudnorm=True):
-    """One encode: Python-reframed frames for every kept segment (+ holds), one audio graph with
-    crossfades/SFX, two-pass loudnorm, ASS captions/hook text burned in."""
+def prepare(src, clip_start, clip_end, reframe_mode="auto"):
     sw, sh, fps = probe(src)
     fps = min(fps, 60.0)
     plan = reframe.make_plan(src, clip_start, clip_end - clip_start, sw, sh, reframe_mode)
+    return {"src": src, "sw": sw, "sh": sh, "fps": fps, "plan": plan, "clip_start": clip_start}
+
+def _frame_at(ctx, t_src, n=1):
+    g = reframe.render_frames(ctx["src"], t_src, 0.05 + n / ctx["fps"], ctx["sw"], ctx["sh"], ctx["fps"],
+                              analysis=ctx["plan"], t_offset=t_src - ctx["clip_start"])
+    out = []
+    for fr in g:
+        out.append(fr)
+        if len(out) >= n:
+            break
+    g.close()
+    return out
+
+_DET = {}
+def faces_in(fr):
+    """Face boxes (x0, y0, x1, y1) in 1080x1920 output coords, detected at 1/3 scale."""
+    import cv2
+    if "d" not in _DET:
+        _DET["d"] = reframe.Detector(360, 640)
+    small = cv2.resize(fr, (360, 640), interpolation=cv2.INTER_AREA)
+    return [(x * 3, y * 3, (x + w) * 3, (y + h) * 3) for x, y, w, h in _DET["d"](small) if w > 18]
+
+def best_hold_frame(ctx, t0, t1, k=8):
+    """Pick the steadiest, sharpest frame with a clear face in [t0, t1] (avoids blinks/motion/odd angles)."""
+    import cv2
+    best, best_s = None, -1e9
+    for i in range(k):
+        t = t0 + (t1 - t0) * (i + 0.5) / k
+        frs = _frame_at(ctx, t, 3)
+        if len(frs) < 2:
+            continue
+        fr = frs[0]
+        g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+        sharp = cv2.Laplacian(cv2.resize(g, (360, 640)), cv2.CV_64F).var()
+        motion = float(np.mean(cv2.absdiff(g, cv2.cvtColor(frs[-1], cv2.COLOR_BGR2GRAY))))
+        fs = faces_in(fr)
+        face = max(((b[2] - b[0]) * (b[3] - b[1]) for b in fs), default=0) / (1080 * 1920)
+        centred = max((1 - abs((b[0] + b[2]) / 2 - 540) / 540 for b in fs), default=0)
+        score = (3.0 if fs else 0) + min(face * 20, 2) + centred + min(sharp / 300, 1.5) - motion / 4
+        if score > best_s:
+            best, best_s = (t, fr), score
+    return best
+
+def face_track(ctx, items, fx, step=0.5):
+    """[(t_out, [boxes])] sampled every `step` s of output time (after zoom), used to keep text off faces."""
+    out, t_out = [], 0.0
+    for it in items:
+        dur = it["dur"] if it["kind"] == "hold" else it["e"] - it["s"]
+        k = 0.0
+        while k < dur:
+            if it["kind"] == "hold":
+                fr = it.get("frame")
+                if fr is None:
+                    fr = (_frame_at(ctx, it["at"]) or [None])[0]
+            else:
+                fr = (_frame_at(ctx, it["s"] + k) or [None])[0]
+            if fr is not None:
+                z = zoom_at(t_out + k, fx)
+                bx = faces_in(apply_zoom(fr, z))
+                out.append((t_out + k, bx))
+            k += step if it["kind"] == "src" else max(step, dur)
+        t_out += dur
+    return out
+
+def pick_holds(ctx, items):
+    for it in items:
+        if it["kind"] == "hold" and it.get("window") and it.get("frame") is None:
+            b = best_hold_frame(ctx, *it["window"])
+            if b:
+                it["at"], it["frame"] = b
+
+def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, reframe_mode="auto", crf=20,
+                preset="medium", watermark=None, loudnorm=True, ctx=None):
+    """One encode: Python-reframed frames for every kept segment (+ holds), one audio graph with
+    crossfades/SFX, two-pass loudnorm, ASS captions/hook text burned in."""
+    ctx = ctx or prepare(src, clip_start, clip_end, reframe_mode)
+    sw, sh, fps, plan = ctx["sw"], ctx["sh"], ctx["fps"], ctx["plan"]
     base = max(0.0, min(it.get("s", clip_start) for it in items) - 1.0)
     span = max(it.get("e", clip_end) for it in items) - base + 1.0
     sin = ["-ss", f"{base:.3f}", "-t", f"{span:.3f}", "-i", str(src)]
@@ -205,7 +283,7 @@ def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, refram
     if watermark and watermark.get("watermark"):
         from .watermark import Overlay
         wm = Overlay(1080, 1920, watermark)
-    emo = EmojiPop(fx.get("emoji") or [], fx.get("emoji_y", 900)) if fx.get("emoji") else None
+    emo = EmojiPop(fx.get("emoji") or [], fx.get("emoji_y", 660), places=fx.get("emoji_places")) if fx.get("emoji") else None
     t_out, nfr, last = 0.0, 0, None
     for it in items:
         k0 = round(t_out * fps)

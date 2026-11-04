@@ -101,7 +101,7 @@ def merge_number_tokens(ws):
             out.append(w)
     return out
 
-def build_ass(words, clip_start, clip_end, style, W=1080, H=1920, overlays=None):
+def build_ass(words, clip_start, clip_end, style, W=1080, H=1920, overlays=None, y_at=None):
     st = style
     hdr = f"""[Script Info]
 ScriptType: v4.00+
@@ -122,8 +122,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     ev = []
     ws = merge_number_tokens([w for w in words if w["e"] > clip_start and w["s"] < clip_end])
     cyc = st.get("highlight_cycle") or [st["highlight"]]
+    y_default = y
     for pi, pg in enumerate(pages(ws, st["max_words"])):
         hl = cyc[pi % len(cyc)]
+        if y_at is not None:  # face-aware: one position per caption page
+            y = int(y_at(pg[0]["s"] - clip_start, pg[-1]["e"] - clip_start) or y_default)
         nxt_page_start = None
         for k, w in enumerate(pg):
             s = w["s"] - clip_start

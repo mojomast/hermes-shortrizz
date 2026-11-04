@@ -70,12 +70,33 @@ class Overlay:
         x = frame_w - w - int(192 * sx) if st["position"].endswith("right") else int(120 * sx)
         y = int(288 * sy) if st["position"].startswith("top") else int(1240 * sy) - h
         self.box = (y, y + h, x, x + w)
+        # dark outline (dilated alpha) so the white mark reads on white/bright frames
+        k = max(3, int(w / 90)) | 1
+        ring = cv2.dilate(img[:, :, 3], np.ones((k, k), np.uint8))
+        self.ring = cv2.GaussianBlur(ring, (0, 0), k / 3).astype(np.float32)[..., None] / 255.0
+        # rounded translucent backing pill, only used on bright backgrounds (adaptive)
+        pad = int(h * 0.35)
+        self.pbox = (max(0, y - pad), min(frame_h, y + h + pad), max(0, x - pad), min(frame_w, x + w + pad))
+        ph, pw = self.pbox[1] - self.pbox[0], self.pbox[3] - self.pbox[2]
+        pill = np.zeros((ph, pw), np.uint8)
+        r = ph // 2
+        cv2.rectangle(pill, (r, 0), (pw - r, ph - 1), 255, -1)
+        cv2.circle(pill, (r, r), r, 255, -1); cv2.circle(pill, (pw - r - 1, r), r, 255, -1)
+        self.pill = cv2.GaussianBlur(pill, (0, 0), 2).astype(np.float32)[..., None] / 255.0
+        self.opacity = st["opacity"]
 
     def apply(self, fr):
+        fr = fr.copy() if not fr.flags.writeable else fr
+        py0, py1, px0, px1 = self.pbox
+        bg = fr[py0:py1, px0:px1].astype(np.float32)
+        lum = float(bg.mean())
+        if lum > 150:  # bright background: soft dark pill behind the mark, strength grows with brightness
+            k = min(0.45, (lum - 150) / 105 * 0.45) * self.opacity / 0.7
+            fr[py0:py1, px0:px1] = np.clip(bg * (1 - self.pill * k), 0, 255).astype(np.uint8)
         y0, y1, x0, x1 = self.box
         roi = fr[y0:y1, x0:x1].astype(np.float32)
         roi = roi * (1 - self.sh)
+        roi = roi * (1 - self.ring * min(0.55, 0.25 + max(0.0, lum - 110) / 300))  # outline, stronger when bright
         roi = roi * (1 - self.a) + self.rgb * self.a
-        fr = fr.copy() if not fr.flags.writeable else fr
         fr[y0:y1, x0:x1] = np.clip(roi, 0, 255).astype(np.uint8)
         return fr

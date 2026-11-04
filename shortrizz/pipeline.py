@@ -39,9 +39,20 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
             edl = edits.make_edl(src, words, c, edit_opts, cache, tr_hash, (prev_edls or {}).get(i))
             (out / f"{name}.edl.json").write_text(json.dumps(edl, indent=1, ensure_ascii=False))
             items, cw, ovl, fx, edit_report, total = edits.assemble(src, words, c, edl, edit_opts, style, out, name)
-            ass.write_text(captions.build_ass(cw, 0.0, total, style, overlays=ovl))
+            ctx = render.prepare(src, c["start"], c["end"], reframe_mode)
+            render.pick_holds(ctx, items)
+            track = render.face_track(ctx, items, fx)
+            base_y = min(int(1920 * style["pos_y"]), int(captions.SAFE_BOTTOM_Y - style["size"] * 0.6))
+            hook_until = max((o["t1"] for o in ovl if o.get("pos") == "top"), default=0.0)
+            y_at = edits.caption_y_fn(track, base_y, style["size"], hook_until)
+            if fx.get("emoji"):
+                fx["emoji_places"] = edits.emoji_places(track, fx["emoji"], y_at)
+                edit_report["emoji"] = [e for (t0, e) in fx["emoji"] if fx["emoji_places"].get(t0)]
+            moved = sum(1 for t, _ in track if y_at(t, t) != base_y)
+            edit_report["caption_moves"] = moved
+            ass.write_text(captions.build_ass(cw, 0.0, total, style, overlays=ovl, y_at=y_at))
             info = render.render_edit(src, c["start"], c["end"], items, ass, mp4, fx, reframe_mode, preset=preset,
-                                      watermark=watermark, loudnorm=edit_opts["loudnorm"])
+                                      watermark=watermark, loudnorm=edit_opts["loudnorm"], ctx=ctx)
             log(f"  edits: -{edit_report['removed_sec']}s, {edit_report['cuts']} cuts, final {edit_report['final_sec']}s")
             for f in out.glob(f"{name}.*.wav"):
                 f.unlink()
@@ -92,7 +103,7 @@ def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DE
                               cache_file=None if fresh else cache / f"{Path(src).stem}.picks.{count}-{mn:g}-{mx:g}.{_tr_hash(tr)}.json")
     timings["select"] = time.time() - t0 - sum(timings.values())
     log(f"selected {len(clips)} clip(s)")
-    eo = _edit_opts(edits)
+    eo = {**_edit_opts(edits), "min_len": mn, "max_len": mx}
     results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm, eo, cache, _tr_hash(tr))
     timings["render"] = time.time() - t0 - sum(timings.values())
     meta["video_path"] = str(src)
@@ -133,7 +144,7 @@ def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=N
     prog = Progress(out)
     from .watermark import settings as wm_settings
     wm = wm_settings(watermark)
-    eo = _edit_opts(edits)
+    eo = {**_edit_opts(edits), "min_len": prev["settings"].get("min"), "max_len": prev["settings"].get("max")}
     prev_edls = {}
     for i, p in enumerate(prev["clips"], 1):  # reuse the saved EDLs -> no LLM call on restyle
         f = run_dir / p.get("edl", "-")

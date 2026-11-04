@@ -8,7 +8,7 @@ import hashlib, json, os, re
 from pathlib import Path
 from .util import log
 
-EDL_VERSION = 1
+EDL_VERSION = 2
 
 # platform safe zones for 1080x1920 (union of TikTok / Reels / Shorts UI)
 SAFE = {"top": 288, "bottom_y": 1240, "left": 120, "right": 192}
@@ -21,6 +21,15 @@ PRESETS = {  # --edit
 }
 MIN_KEEP, MIN_REMOVE = 0.25, 0.15
 MAX_DROP_FRAC = 0.12          # never let edits remove more than 12% of a clip's words
+# words the LLM pass may remove on their own (as whole phrases); everything else needs to be a repeat or restart
+FILLER_PHRASES = [("you", "know"), ("i", "mean"), ("sort", "of"), ("kind", "of"), ("um",), ("uh",), ("erm",), ("uhm",),
+                  ("umm",), ("uhh",), ("hmm",), ("mm",), ("ah",), ("er",), ("like",), ("basically",), ("literally",),
+                  ("actually",), ("right",), ("okay",), ("ok",), ("well",), ("so",), ("yeah",)]
+# pronouns, connectives and meaning words: never cut alone, only as part of an exact repeat / restart
+MEANING = set("""i me my mine you your yours he him his she her hers we us our ours they them their theirs it its
+this that these those who whom whose which what where when why how and but or nor so because if then than though
+although while unless since until is are was were be been am do does did have has had will would can could should
+must may might all every only just very more most less least""".split())
 FILLERS = {"um", "uh", "erm", "er", "uhm", "umm", "uhh", "hmm", "mm", "ah"}
 PROTECTED = re.compile(r"(\d|^(not|never|no|none|nobody|nothing|nor|neither|cannot|without)$|n't$)", re.I)
 # faster-whisper normalises fillers away; a verbatim-style prompt makes it keep most of them
@@ -78,13 +87,16 @@ def rule_drops(words, a, b):
 # ------------------------------------------------------------------ LLM pass
 EDL_PROMPT = """You are a short-form video editor. Below is the transcript of ONE vertical clip, one word per
 line as [index] word (start s). Plan tight, natural edits. Rules:
-- "drop": ONLY false starts, abandoned phrases, stutters/repeats and filler (um, uh, "you know" used as filler).
-  Use index ranges w0..w1 inclusive. Never drop numbers, negations (not/never/no/n't) or anything that changes meaning.
+- "drop": ONLY (a) filler words used as filler (um, uh, "you know", "I mean", "like" as a filler, "kind of", "sort of"),
+  (b) exact stutter repeats ("that's that's" -> drop the first), (c) false starts the speaker restarts ("we went, we drove").
+  Use index ranges w0..w1 inclusive. Never drop pronouns (I, you, it, which...), connectives (and, but, because, which is),
+  numbers, negations (not/never/no/n't) or anything that changes meaning.
   Be conservative: at most {maxdrop} words total. If the speech is clean, return [].
 - "hook_text": 2-6 word on-screen hook for the first 3 seconds that is TRUE to the clip (no clickbait), Title Case.
 - "emphasis": up to {nemph} indices of the most important single words (for a punch-in zoom), spread out.
 - "emoji": up to {nemoji} {{"w": index, "emoji": one emoji}} on concrete nouns/emotions, spread out.
-- "cold_open": the single most striking 4-12 consecutive words (a complete phrase) to flash first, {{"w0","w1"}}.
+- "cold_open": the most striking SHORT line to flash first: 4-12 consecutive words lasting 2-5 seconds. A clause or part
+  of a sentence is fine if it lands on its own ("this is the trap"). Not the clip's first line. {{"w0","w1"}}. Always give one.
 - "intro": one spoken narrator line, max 12 words, giving context (third person, no hype, don't impersonate the speaker).
 - "cta": short end call to action, max 5 words (e.g. "Follow for part 2").
 - "loop_end": index of the last word to keep so the ending flows back into the opening line, or null.
@@ -127,6 +139,77 @@ def _int(x):
     except (TypeError, ValueError):
         return None
 
+def _is_filler_run(toks, prev_word=""):
+    """True if toks is made only of filler phrases ("you know", "right like", "um")."""
+    i = 0
+    while i < len(toks):
+        for ph in sorted(FILLER_PHRASES, key=len, reverse=True):
+            if tuple(toks[i:i + len(ph)]) == ph:
+                if ph == ("like",) and not (prev_word.endswith(",") or len(toks) > 1):
+                    return False  # "I like it" - only a filler when set off by a comma or with other filler
+                i += len(ph); break
+        else:
+            return False
+    return True
+
+def drop_allowed(words, w0, w1, b, reason=""):
+    """Only true fillers, exact repeats and restarts may go; protects pronouns/connectives/meaning words."""
+    toks = [norm(words[k]["w"]) for k in range(w0, w1 + 1)]
+    n = len(toks)
+    nxt = [norm(words[k]["w"]) for k in range(w1 + 1, min(b, w1 + 6) + 1)]
+    if nxt[:n] == toks:                       # exact repeat ("that's that's", "look at look at")
+        return True
+    if n <= 4 and toks[0] and toks[0] in nxt[:3] and words[w1]["e"] - words[w0]["s"] < 2.0 \
+            and (reason == "false_start" or toks[0] in MEANING):
+        return True                           # restart: "we went, we drove"
+    if any(t in MEANING for t in toks) and not _is_filler_run(toks):
+        return False
+    prev = words[w0 - 1]["w"] if w0 > 0 else ""
+    return _is_filler_run(toks, prev if not words[w0]["w"].endswith(",") else prev + ",")
+
+def _clause_spans(words, a, b, mn=2.0, mx=5.0):
+    """Candidate stand-alone clauses: break at punctuation, pauses >0.25 s and clause words."""
+    brk = {"but", "because", "so", "and", "which", "then"}
+    starts = [a] + [i for i in range(a + 1, b + 1) if words[i - 1]["w"][-1:] in ".,?!;:" or
+                    words[i]["s"] - words[i - 1]["e"] > 0.25 or norm(words[i]["w"]) in brk]
+    out = []
+    for i0 in starts:
+        for j in range(i0 + 3, min(b, i0 + 13) + 1):
+            d = words[j]["e"] - words[i0]["s"]
+            if d > mx:
+                break
+            end_ok = j == b or words[j]["w"][-1:] in ".,?!;:" or words[j + 1]["s"] - words[j]["e"] > 0.25
+            if d >= mn and end_ok:
+                out.append((i0, j))
+    return out
+
+_PUNCH = re.compile(r"\b(never|nobody|everyone|always|biggest|worst|best|secret|truth|mistake|wrong|insane|crazy|"
+                    r"actually|problem|money|billion|million|\d+|why|how|not|won't|can't|only|real|trap|win|lose)\b", re.I)
+
+def pick_cold_open(words, a, b, llm, taken=()):
+    """LLM line if it is 1.5-5 s (trimmed to a clause if longer), else the punchiest 2-5 s clause."""
+    first3 = words[a]["s"] + 3.0
+    ok = lambda i0, j: (words[i0]["s"] >= first3 and not (set(range(i0, j + 1)) & set(taken)))
+    c0, c1 = _int(llm.get("w0")), _int(llm.get("w1"))
+    if c0 is not None and c1 is not None and a <= c0 <= c1 <= b:
+        if words[c1]["e"] - words[c0]["s"] > 5.0:  # trim long picks to their punchiest sub-clause
+            subs = [(i, j) for i, j in _clause_spans(words, c0, c1) if ok(i, j)]
+            if subs:
+                c0, c1 = max(subs, key=lambda ij: (len(_PUNCH.findall(_txt(words, *ij))), -(ij[1] - ij[0])))
+        if 1.5 <= words[c1]["e"] - words[c0]["s"] <= 5.0 and ok(c0, c1):
+            return {"w0": c0, "w1": c1, "text": _txt(words, c0, c1), "by": "llm"}
+    cands = [(i, j) for i, j in _clause_spans(words, a, b) if ok(i, j)]
+    if not cands:
+        return None
+    def score(ij):
+        t = _txt(words, *ij)
+        return (len(_PUNCH.findall(t)) * 2 + t.count("?") + t.count("!") - abs(words[ij[1]]["e"] - words[ij[0]]["s"] - 3.0) * 0.3)
+    i0, j = max(cands, key=score)
+    return {"w0": i0, "w1": j, "text": _txt(words, i0, j), "by": "heuristic"}
+
+def _txt(words, i, j):
+    return " ".join(words[k]["w"] for k in range(i, j + 1))
+
 def validate(plan, words, a, b, rule=None):
     """Clamp an LLM plan to safe, word-boundary edits. Returns a clean dict."""
     nwords = b - a + 1
@@ -141,6 +224,8 @@ def validate(plan, words, a, b, rule=None):
         if rng & taken or w1 - w0 + 1 > 6:
             continue
         if any(PROTECTED.search(norm(words[k]["w"])) for k in rng):
+            continue
+        if not drop_allowed(words, w0, w1, b, str(d.get("reason", ""))):
             continue
         if removed + len(rng) > cap:
             continue
@@ -161,12 +246,7 @@ def validate(plan, words, a, b, rule=None):
         em = str(e.get("emoji", "")).strip() if isinstance(e, dict) else ""
         if w is not None and a <= w <= b and w not in taken and 0 < len(em) <= 4 and words[w]["s"] - last >= 4.0:
             emoji.append({"w": w, "emoji": em}); last = words[w]["s"]
-    co = plan.get("cold_open") or {}
-    c0, c1 = _int(co.get("w0")), _int(co.get("w1"))
-    cold = None
-    if c0 is not None and c1 is not None and a + 3 <= c0 <= c1 <= b and not (set(range(c0, c1 + 1)) & taken):
-        if 1.0 <= words[c1]["e"] - words[c0]["s"] <= 3.5:
-            cold = {"w0": c0, "w1": c1, "text": " ".join(words[k]["w"] for k in range(c0, c1 + 1))}
+    cold = pick_cold_open(words, a, b, plan.get("cold_open") or {}, taken)
     le = _int(plan.get("loop_end"))
     loop_end = le if le is not None and b - max(3, nwords // 4) <= le <= b and le not in taken else None
     def short(s, n):
@@ -215,15 +295,15 @@ def _lead(mask, t, limit):
                 return min(limit, max(0.0, t - s))
     return 0.0
 
-def build_segments(words, a, b, drops, policy, mask=None, loop_end=None):
+def build_segments(words, a, b, drops, policy, mask=None, loop_end=None, end_idx=None):
     """Return source-time segments [(s, e)] covering kept words, tightened by policy."""
-    end_idx = loop_end if loop_end is not None else b
+    end_idx = loop_end if loop_end is not None else (end_idx if end_idx is not None else b)
     dropped = {k for d in drops for k in range(d["w0"], d["w1"] + 1)}
     kept = [i for i in range(a, end_idx + 1) if i not in dropped]
     if not kept:
         return [(words[a]["s"], words[b]["e"])], []
     if policy is None:
-        return [(max(0.0, words[a]["s"] - 0.08), words[end_idx]["e"] + (0.04 if loop_end else 0.12))], []
+        return [(max(0.0, words[a]["s"] - 0.08), words[end_idx]["e"] + (0.04 if loop_end is not None else 0.12))], []
     T, pre, post = policy["target_gap"], policy["pad_pre"], policy["pad_post"]
     segs, cuts = [], []
     s0 = max(0.0, words[kept[0]]["s"] - pre)
@@ -268,7 +348,7 @@ def remap(words, idx, segs, offset=0.0):
 
 def edl_key(src, clip, opts, tr_hash=""):
     h = hashlib.sha1(json.dumps([Path(src).name, round(clip["start"], 2), round(clip["end"], 2), opts.get("edit"),
-                                 opts.get("llm_edits"), tr_hash]).encode()).hexdigest()[:10]
+                                 opts.get("llm_edits"), tr_hash, EDL_VERSION]).encode()).hexdigest()[:10]
     return h
 
 def make_edl(src, words, clip, opts, cache=None, tr_hash="", existing=None):
@@ -300,23 +380,54 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
     policy = edl.get("gap_policy")
     mask = speech_mask(src, clip["start"] - 0.5, clip["end"] + 0.5) if policy else None
     loop_end = edl.get("loop_end") if opts["loop"] else None
-    segs, cuts = build_segments(words, a, b, edl["drop"] if policy else [], policy, mask, loop_end)
+    drops = edl["drop"] if policy else []
+    segs, cuts = build_segments(words, a, b, drops, policy, mask, loop_end)
     items, cap_words, t = [], [], 0.0
     fx = {"xfade_ms": (policy or {}).get("xfade_ms", 15), "bases": [], "punches": [], "drift": [], "sfx": [],
           "emoji": [], "loop": bool(loop_end is not None)}
     sfxdir = Path(__file__).parent / "assets" / "sfx"
     voice = False
-    first_t = words[a]["s"]
+    # --- narrator lines and cold open first, so the body can be trimmed to keep the length band
+    intro_d = outro_d = None
     if opts["tts_intro"] and edl.get("intro"):
         from . import tts
-        wav = Path(workdir) / f"{name}.intro.wav"
-        d = tts.speak(edl["intro"], wav)
-        if d:
-            items.append({"kind": "hold", "dur": d + 0.2, "wav": str(wav), "at": first_t + 0.6})  # tracker settled
-            fx["drift"].append((0.0, d + 0.2)); t += d + 0.2; voice = True
-            cap_words += _tts_words(edl["intro"], 0.0, d)
-    if opts["cold_open"] and edl.get("cold_open"):
-        c0, c1 = edl["cold_open"]["w0"], edl["cold_open"]["w1"]
+        intro_wav = Path(workdir) / f"{name}.intro.wav"
+        intro_d = tts.speak(edl["intro"], intro_wav)
+    if opts["tts_outro"] and edl.get("cta") and loop_end is None:
+        from . import tts
+        outro_wav = Path(workdir) / f"{name}.outro.wav"
+        outro_d = tts.speak(edl["cta"], outro_wav)
+    cold = edl.get("cold_open") if opts["cold_open"] else None
+    cold_d = (words[cold["w1"]]["e"] + 0.10 - max(0.0, words[cold["w0"]]["s"] - 0.06)) if cold else 0.0
+    src_len = clip["end"] - clip["start"]
+    budget = min(src_len, opts.get("max_len") or 1e9)   # never longer than the original or the length band
+    floor = min(src_len, opts.get("min_len") or 0) * 0.9
+    body = lambda sg: sum(e - s for s, e in sg)
+    extras = lambda: (intro_d + 0.2 if intro_d else 0) + cold_d + (outro_d + 0.4 if outro_d else 0)
+    trimmed_end = None
+    if body(segs) + extras() > budget + 0.05:
+        # give up extras (outro, then intro, then cold open) rather than gut the body below the band
+        for k in ("outro", "intro", "cold"):
+            if budget - extras() >= max(floor - extras(), 0.6 * body(segs)) or budget - extras() >= body(segs):
+                break
+            if k == "outro" and outro_d: outro_d = None
+            elif k == "intro" and intro_d: intro_d = None
+            elif k == "cold" and cold: cold, cold_d = None, 0.0
+        target = budget - extras()
+        if body(segs) > target + 0.05:
+            j, segs2, cuts2 = trim_body(words, a, b, drops, policy, mask, target, loop_end is not None)
+            if segs2:
+                segs, cuts, trimmed_end = segs2, cuts2, j
+                if loop_end is not None:
+                    loop_end = j
+    first_t = words[a]["s"]
+    if intro_d:
+        items.append({"kind": "hold", "dur": intro_d + 0.2, "wav": str(intro_wav), "at": first_t,
+                      "window": (first_t, min(first_t + 4.0, clip["end"]))})
+        fx["drift"].append((0.0, intro_d + 0.2)); t += intro_d + 0.2; voice = True
+        cap_words += _tts_words(edl["intro"], 0.0, intro_d)
+    if cold:
+        c0, c1 = cold["w0"], cold["w1"]
         cs = (max(0.0, words[c0]["s"] - 0.06), words[c1]["e"] + 0.10)
         items.append({"kind": "src", "s": cs[0], "e": cs[1]})
         w, t = remap(words, range(c0, c1 + 1), [cs], t)
@@ -326,7 +437,8 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
             fx["sfx"].append((max(0.0, t - 0.25), str(sfxdir / "whoosh.wav")))
     main0 = t
     dropped = {k for d in (edl["drop"] if policy else []) for k in range(d["w0"], d["w1"] + 1)}
-    w, t = remap(words, [i for i in range(a, b + 1) if i not in dropped], segs, t)
+    last_i = trimmed_end if trimmed_end is not None else (loop_end if loop_end is not None else b)
+    w, t = remap(words, [i for i in range(a, last_i + 1) if i not in dropped], segs, t)
     cap_words += w
     tt = main0
     for k, (s, e) in enumerate(segs):
@@ -354,16 +466,13 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
     overlays = []
     if opts["hook_text"] and edl.get("hook_text"):
         overlays.append({"text": edl["hook_text"], "t0": 0.0, "t1": min(2.8, t), "pos": "top"})
-    if opts["tts_outro"] and edl.get("cta") and loop_end is None:
-        from . import tts
-        wav = Path(workdir) / f"{name}.outro.wav"
-        d = tts.speak(edl["cta"], wav)
-        if d:
-            last_s = segs[-1][1] - 0.05
-            items.append({"kind": "hold", "dur": d + 0.4, "wav": str(wav), "at": last_s})
-            fx["drift"].append((t, t + d + 0.4))
-            overlays.append({"text": edl["cta"], "t0": t, "t1": t + d + 0.4, "pos": "middle"})
-            t += d + 0.4; voice = True
+    if outro_d:
+        last_s = segs[-1][1] - 0.05
+        items.append({"kind": "hold", "dur": outro_d + 0.4, "wav": str(outro_wav), "at": last_s,
+                      "window": (max(segs[-1][0], last_s - 4.0), last_s)})
+        fx["drift"].append((t, t + outro_d + 0.4))
+        overlays.append({"text": edl["cta"], "t0": t, "t1": t + outro_d + 0.4, "pos": "middle"})
+        t += outro_d + 0.4; voice = True
     elif (opts["loop"] or opts["tts_outro"]) and edl.get("cta"):
         overlays.append({"text": edl["cta"], "t0": max(0.0, t - 1.5), "t1": t, "pos": "middle"})
     main_src = sum(e - s for s, e in segs)
@@ -372,13 +481,84 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
               "gap_cuts": sum(c["reason"] == "gap" for c in cuts), "drop_cuts": sum(c["reason"] == "drop" for c in cuts),
               "dropped_words": [d["text"] for d in edl["drop"]] if policy else [], "final_sec": round(t, 2),
               "hook_text": edl.get("hook_text") if opts["hook_text"] else None,
-              "cold_open": (edl.get("cold_open") or {}).get("text") if opts["cold_open"] else None,
-              "intro_tts": edl.get("intro") if voice and opts["tts_intro"] else None,
+              "cold_open": cold["text"] if cold else None, "outro_tts": edl.get("cta") if outro_d else None,
+              "trimmed_tail_sec": round(max(0.0, words[b]["e"] - words[trimmed_end]["e"]), 2) if trimmed_end is not None else 0.0,
+              "budget_sec": round(budget, 2),
+              "intro_tts": edl.get("intro") if intro_d else None,
               "synthetic_voice": voice, "loop": fx["loop"], "zoom_punches": len(fx["punches"]),
               "emoji": [e[1] for e in fx["emoji"]], "sfx": len(fx["sfx"])}
     return items, cap_words, overlays, fx, report, t
+
+def trim_body(words, a, b, drops, policy, mask, target, loop=False):
+    """Latest end word whose body fits target: prefer sentence ends, then pauses, then any word."""
+    dropped = {k for d in drops for k in range(d["w0"], d["w1"] + 1)}
+    lo = a + max(3, (b - a) // 3)
+    tiers = ([], [], [])
+    for j in range(b - 1, lo - 1, -1):
+        if j in dropped:
+            continue
+        w = words[j]["w"]
+        tier = 0 if w[-1:] in ".?!" else 1 if (w[-1:] in ",;:" or words[j + 1]["s"] - words[j]["e"] > 0.3) else 2
+        tiers[tier].append(j)
+    best = []
+    for tier in tiers:  # latest fitting end word in each tier
+        for j in tier:
+            sg, cu = build_segments(words, a, b, drops, policy, mask, j if loop else None, end_idx=j)
+            if sum(e - s for s, e in sg) <= target + 0.05:
+                best.append((j, sg, cu)); break
+        else:
+            best.append(None)
+    for tier, slack in ((0, 4.0), (1, 2.0), (2, 1e9)):  # a sentence end may cost up to 4 s, a pause up to 2 s
+        if best[tier] and sum(e - s for s, e in best[tier][1]) >= target - slack:
+            return best[tier]
+    return next((x for x in best if x), (None, None, None))
 
 def _tts_words(text, t0, dur):
     ws = text.split()
     step = dur / max(1, len(ws))
     return [{"w": w, "s": t0 + k * step, "e": t0 + (k + 1) * step - 0.02} for k, w in enumerate(ws)]
+
+
+# ------------------------------------------------------------------ face-aware text placement
+def _faces_between(track, t0, t1):
+    bx = [b for t, boxes in track if t0 - 0.5 <= t <= t1 + 0.25 for b in boxes]
+    return bx
+
+def caption_y_fn(track, base_y, size, hook_until=0.0):
+    """Caption centre y per page: keep the default unless it overlaps a face, then go below the chin
+    (if still above the bottom safe line) or above the forehead (below the top safe zone / hook)."""
+    half = size * 0.62
+    lo_lim = SAFE["bottom_y"] - half            # lowest allowed centre
+    def overlap(y, boxes):
+        return sum(max(0.0, min(y + half, b[3] + 10) - max(y - half, b[1] - 10)) for b in boxes)
+    def y_at(t0, t1):
+        boxes = [b for b in _faces_between(track, t0, t1) if (b[2] - b[0]) > 90]
+        if not boxes or overlap(base_y, boxes) == 0:
+            return base_y
+        top_lim = SAFE["top"] + half + (260 if t0 < hook_until else 40)
+        fy0, fy1 = min(b[1] for b in boxes), max(b[3] for b in boxes)
+        cands = [base_y, min(lo_lim, fy1 + half + 24), max(top_lim, fy0 - half - 24)]
+        cands = [min(lo_lim, max(top_lim, c)) for c in cands]
+        return int(min(cands, key=lambda c: (overlap(c, boxes), abs(c - base_y))))
+    return y_at
+
+EMOJI_SPOTS = [(250, 660), (830 - 75, 660), (250, 880), (830 - 75, 880), (540, 560)]
+
+def emoji_places(track, items, cap_y_fn, size=150):
+    """Choose, for each emoji pop, the first spot that clears every face box and the caption line."""
+    out = {}
+    for t0, _ in items:
+        boxes = _faces_between(track, t0, t0 + 1.2)
+        cy = cap_y_fn(t0, t0 + 1.2) if cap_y_fn else 1160
+        def clear(p):
+            x, y = p
+            r = (x - size / 2 - 12, y - size / 2 - 12, x + size / 2 + 12, y + size / 2 + 12)
+            if r[3] > cy - 80 and r[1] < cy + 80:
+                return False
+            return not any(r[0] < b[2] and b[0] < r[2] and r[1] < b[3] and b[1] < r[3] for b in boxes)
+        spot = next((p for p in EMOJI_SPOTS if clear(p)), None)
+        if spot is not None:
+            out[t0] = spot
+        else:
+            out[t0] = None   # no clean spot: skip this emoji rather than cover a face
+    return out
