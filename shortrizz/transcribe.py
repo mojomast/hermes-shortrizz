@@ -129,7 +129,7 @@ def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
         tr = json.loads(cache.read_text())
         q = quality(tr)
         if q["ok"] and tr.get("version", 0) < 3:  # old caches: check they did not skip speech
-            q["coverage"] = round(speech_coverage(load_audio(video), tr["segments"]), 3)
+            q["coverage"] = round(float(speech_coverage(load_audio(video), tr["segments"])), 3)
             q["ok"] = q["coverage"] >= 0.8
         if q["ok"]:  # older-version caches are kept when they pass the loop checks
             log(f"using cached transcript {cache}")
@@ -146,16 +146,16 @@ def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
     segs = _repair_loops(model, audio, segs, lang)
     tr = {"version": TRANSCRIPT_VERSION, "language": lang, "segments": segs}
     q = quality(tr, dur)
-    q["coverage"] = round(speech_coverage(audio, segs), 3)
-    q["ok"] = q["ok"] and q["coverage"] >= 0.8
+    q["coverage"] = round(float(speech_coverage(audio, segs)), 3)
+    q["ok"] = bool(q["ok"] and q["coverage"] >= 0.8)
     if not q["ok"]:
         log(f"  transcript still looks bad {q}; retrying with language={lang}, no VAD, greedy fallback")
         segs, _ = _run(model, audio, language=lang, vad_filter=False, beam_size=1)
         segs = _repair_loops(model, audio, segs, lang)
         tr["segments"] = segs
         q = quality(tr, dur)
-        q["coverage"] = round(speech_coverage(audio, segs), 3)
-        q["ok"] = q["ok"] and q["coverage"] >= 0.8
+        q["coverage"] = round(float(speech_coverage(audio, segs)), 3)
+        q["ok"] = bool(q["ok"] and q["coverage"] >= 0.8)
     tr["quality"] = q
     log(f"  transcript: {q['words']} words, {q['wpm']} wpm, loop {q['loop_frac']:.0%}")
     if not q["ok"]:
@@ -163,8 +163,16 @@ def transcribe(video, cache_dir, model_size="small", language=None, threads=0):
                "little or no speech" if q["sparse"] else "Whisper kept looping")
         raise SystemExit(f"transcript failed sanity checks ({why}; {q}). The audio may be music, noise or a "
                          f"non-speech track. Try --model medium or --language en.")
-    cache.write_text(json.dumps(tr))
+    cache.write_text(json.dumps(tr, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
     return tr
+
+def _json_default(o):
+    """numpy scalars/arrays (e.g. numpy.bool_ from quality checks) -> plain Python."""
+    if hasattr(o, "tolist"):
+        return o.tolist()
+    if hasattr(o, "item"):
+        return o.item()
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
 def all_words(tr):
     """Flat word list; marks Whisper segment edges (ss/se) as fallback phrase boundaries."""

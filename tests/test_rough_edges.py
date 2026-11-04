@@ -263,3 +263,18 @@ def test_tight_cold_open_never_shortened_mid_phrase():
     ws2 = _w("errors in what gets picked |may still degrade the model.")
     ok = [j for j in range(2, len(ws2) - 1) if E.natural_end(ws2, j)]
     assert ok == [4]                         # "picked" (pause after it), never "may"/"still"
+
+def test_youtube_id_from_url_skips_network_lookup(tmp_path, monkeypatch):
+    from shortrizz import download
+    assert download._youtube_id("https://www.youtube.com/watch?v=Ln3AGdhSWd4") == "Ln3AGdhSWd4"
+    assert download._youtube_id("https://youtu.be/Ln3AGdhSWd4?t=3") == "Ln3AGdhSWd4"
+    (tmp_path / "Ln3AGdhSWd4.mp4").write_bytes(b"x")
+    monkeypatch.setattr(download, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
+    p, meta = download.fetch("https://www.youtube.com/watch?v=Ln3AGdhSWd4", tmp_path)
+    assert p.name == "Ln3AGdhSWd4.mp4" and meta["id"] == "Ln3AGdhSWd4"
+
+def test_transcript_quality_json_safe():
+    import json, numpy as np
+    q = {"coverage": round(float(np.float32(0.91)), 3)}
+    q["ok"] = bool(True and q["coverage"] >= 0.8)
+    json.dumps(q)

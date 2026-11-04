@@ -5,6 +5,10 @@ from .util import run, which, log
 def is_url(s):
     return bool(re.match(r"^https?://", s))
 
+def _youtube_id(url):
+    m = re.search(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/)|youtu\.be/)([A-Za-z0-9_-]{11})", url)
+    return m.group(1) if m else None
+
 def fetch(src, cache_dir):
     """Return (video_path, meta dict). Downloads URLs with yt-dlp (cached by video id)."""
     if not is_url(src):
@@ -20,8 +24,19 @@ def fetch(src, cache_dir):
         ytdlp = [sys.executable, "-m", "yt_dlp"]
     ytdlp = ytdlp if isinstance(ytdlp, list) else [ytdlp]
     cache_dir = Path(cache_dir); cache_dir.mkdir(parents=True, exist_ok=True)
-    vid = run([*ytdlp, "--print", "id", "--skip-download", "--no-warnings", src],
-              capture_output=True, text=True).stdout.strip().splitlines()[-1]
+    vid = _youtube_id(src)
+    if not (vid and (cache_dir / f"{vid}.mp4").exists()):
+        vid = None
+        for attempt in range(3):   # the id lookup sometimes fails transiently (rate limits)
+            r = run([*ytdlp, "--print", "id", "--skip-download", "--no-warnings", src],
+                    capture_output=True, text=True, check=False)
+            lines = r.stdout.strip().splitlines()
+            if r.returncode == 0 and lines:
+                vid = lines[-1]; break
+            log(f"yt-dlp id lookup failed (attempt {attempt + 1}/3), retrying")
+            import time; time.sleep(5 * (attempt + 1))
+        if not vid:
+            raise SystemExit(f"yt-dlp could not read {src}")
     out = cache_dir / f"{vid}.mp4"
     info = cache_dir / f"{vid}.info.json"
     if not out.exists():
