@@ -32,7 +32,8 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
         name = f"{i:02d}-{slug(c['title'])}"
         log(f"[{i}/{len(clips)}] {c['start']:.1f}-{c['end']:.1f}s  score {c['virality_score']}  {c['title']}")
         ass = out / f"{name}.ass"
-        mp4 = out / f"{name}.mp4"
+        final_mp4 = out / f"{name}.mp4"
+        mp4 = out / f"{name}.partial.mp4"   # renamed only once the encode finished (never a half file at the final path)
         edit_report = None
         if edit_opts and edit_opts.get("enabled", True):
             from . import edits
@@ -60,6 +61,7 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
             ass.write_text(captions.build_ass(words, c["start"], c["end"], style))
             info = render.render_clip(src, c["start"], c["end"], ass, mp4, reframe_mode, preset=preset,
                                       watermark=watermark)
+        mp4.replace(final_mp4); mp4 = final_mp4
         render.thumbnail(mp4, out / f"{name}.jpg", min(1.5, (c["end"] - c["start"]) / 2))
         if not keep_ass:
             ass.unlink()
