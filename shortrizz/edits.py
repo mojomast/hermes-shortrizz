@@ -189,7 +189,8 @@ _PUNCH = re.compile(r"\b(never|nobody|everyone|always|biggest|worst|best|secret|
 def pick_cold_open(words, a, b, llm, taken=()):
     """LLM line if it is 1.5-5 s (trimmed to a clause if longer), else the punchiest 2-5 s clause."""
     first3 = words[a]["s"] + 3.0
-    ok = lambda i0, j: (words[i0]["s"] >= first3 and not (set(range(i0, j + 1)) & set(taken)))
+    ok = lambda i0, j: (words[i0]["s"] >= first3 and not (set(range(i0, j + 1)) & set(taken))
+                        and natural_end(words, j))
     c0, c1 = _int(llm.get("w0")), _int(llm.get("w1"))
     if c0 is not None and c1 is not None and a <= c0 <= c1 <= b:
         if words[c1]["e"] - words[c0]["s"] > 5.0:  # trim long picks to their punchiest sub-clause
@@ -206,6 +207,31 @@ def pick_cold_open(words, a, b, llm, taken=()):
         return (len(_PUNCH.findall(t)) * 2 + t.count("?") + t.count("!") - abs(words[ij[1]]["e"] - words[ij[0]]["s"] - 3.0) * 0.3)
     i0, j = max(cands, key=score)
     return {"w0": i0, "w1": j, "text": _txt(words, i0, j), "by": "heuristic"}
+
+_DANGLING = {"and", "or", "but", "the", "a", "an", "to", "of", "in", "on", "by", "for", "with", "can", "could",
+             "will", "would", "is", "are", "was", "were", "be", "do", "does", "that", "this", "which", "who",
+             "my", "your", "our", "their", "its", "his", "her", "so", "if", "as", "at", "from", "than", "very",
+             "i", "we", "you", "they", "it", "he", "she", "really", "just", "not", "no", "have", "has", "had"}
+
+def cold_span(words, c0, c1, pre=0.06, post=0.10, guard=0.03):
+    """Source span for the cold open, padded but never reaching into the neighbouring words
+    (so no clipped syllable from the next word leaks in at the cold-open/body seam)."""
+    s = words[c0]["s"] - pre
+    if c0 > 0:
+        s = max(s, min(words[c0]["s"], words[c0 - 1]["e"] + guard))
+    e = words[c1]["e"] + post
+    if c1 + 1 < len(words):
+        e = min(e, max(words[c1]["e"], words[c1 + 1]["s"] - guard))
+    return max(0.0, s), e
+
+def natural_end(words, j, gap=0.25):
+    """True if a cut right after word j lands at a phrase end: punctuation or a pause, not a dangling word."""
+    w = words[j]["w"].strip()
+    if norm(w) in _DANGLING:
+        return False
+    if re.search(r"[.!?,;:…]$", w):
+        return True
+    return j + 1 >= len(words) or words[j + 1]["s"] - words[j]["e"] >= gap
 
 def _txt(words, i, j):
     return " ".join(words[k]["w"] for k in range(i, j + 1))
@@ -398,6 +424,10 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
         outro_wav = Path(workdir) / f"{name}.outro.wav"
         outro_d = tts.speak(edl["cta"], outro_wav)
     cold = edl.get("cold_open") if opts["cold_open"] else None
+    if cold and not natural_end(words, cold["w1"]):   # saved/LLM picks that stop mid-phrase
+        ends = [j for j in range(cold["w0"] + 2, cold["w1"]) if natural_end(words, j)
+                and words[j]["e"] - words[cold["w0"]]["s"] >= 1.2]
+        cold = {**cold, "w1": ends[-1], "text": _txt(words, cold["w0"], ends[-1])} if ends else None
     cold_d = (words[cold["w1"]]["e"] + 0.10 - max(0.0, words[cold["w0"]]["s"] - 0.06)) if cold else 0.0
     src_len = clip["end"] - clip["start"]
     budget = min(src_len, opts.get("max_len") or 1e9)   # never longer than the original or the length band
@@ -419,12 +449,18 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
         elif what == "intro" and intro_d and "tts_intro" not in explicit:
             intro_d = None; auto_skipped.append("tts_intro")
         elif what == "cold" and cold and cold_d > 2.6:
-            c0, c1 = cold["w0"], cold["w1"]
-            while c1 > c0 + 2 and words[c1]["e"] - words[c0]["s"] > 2.5:
-                c1 -= 1
-            cold = {**cold, "w1": c1, "text": _txt(words, c0, c1)}
-            cold_d = words[c1]["e"] + 0.10 - max(0.0, words[c0]["s"] - 0.06)
-            auto_skipped.append("cold_open_shortened")
+            # shorten only to a natural phrase end (punctuation or a pause), never mid-phrase
+            c0 = cold["w0"]
+            ends = [j for j in range(c0 + 2, cold["w1"]) if words[j]["e"] - words[c0]["s"] <= 2.6
+                    and words[j]["e"] - words[c0]["s"] >= 1.2 and natural_end(words, j)]
+            if ends:
+                c1 = ends[-1]
+                cold = {**cold, "w1": c1, "text": _txt(words, c0, c1)}
+                cold_d = words[c1]["e"] + 0.10 - max(0.0, words[c0]["s"] - 0.06)
+                auto_skipped.append("cold_open_shortened")
+            else:
+                cold, cold_d = None, 0.0
+                auto_skipped.append("cold_open_skipped")
     if auto_skipped:
         log(f"  {'tight clip' if tight else 'short budget'}: {', '.join(auto_skipped)} so the speaker keeps "
             f"{spk():.0%} of the runtime (pass --tts-intro/--tts-outro explicitly to force narrator lines)")
@@ -451,7 +487,7 @@ def assemble(src, words, clip, edl, opts, style, workdir, name):
         cap_words += _tts_words(edl["intro"], 0.0, intro_d)
     if cold:
         c0, c1 = cold["w0"], cold["w1"]
-        cs = (max(0.0, words[c0]["s"] - 0.06), words[c1]["e"] + 0.10)
+        cs = cold_span(words, c0, c1)
         items.append({"kind": "src", "s": cs[0], "e": cs[1]})
         w, t = remap(words, range(c0, c1 + 1), [cs], t)
         cap_words += w

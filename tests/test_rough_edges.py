@@ -231,3 +231,35 @@ def test_hook_band_matches_text_and_sits_above_eyes():
     assert abs((y1 - y0) - (lines * size * 1.05 + 30)) < 1
     ey = face[1] + 0.25 * (face[3] - face[1])
     assert max(0.0, min(y1, face[3]) - max(y0, ey)) <= 0.1 * (y1 - y0)   # above the eyes or under the chin
+
+
+def _w(spec):
+    out, t = [], 0.0
+    for tok in spec.split():
+        gap = 0.4 if tok.startswith("|") else 0.02
+        tok = tok.lstrip("|"); t += gap
+        out.append({"w": tok, "s": t, "e": t + 0.25}); t += 0.25
+    return out
+
+def test_natural_end_rejects_mid_phrase():
+    ws = _w("we are going to inject code and this code can do anything. |it can copy")
+    assert not E.natural_end(ws, 6)          # "and"
+    assert not E.natural_end(ws, 10)         # "do"
+    assert E.natural_end(ws, 11)             # "anything."
+
+def test_cold_span_does_not_bleed_into_neighbours():
+    ws = _w("a b c d e")
+    s, e = E.cold_span(ws, 1, 3)
+    assert s >= ws[0]["e"] and e <= ws[4]["s"]
+    assert s <= ws[1]["s"] and e >= ws[3]["e"]
+
+def test_tight_cold_open_never_shortened_mid_phrase():
+    # cold open "we are going to inject code and this code can do anything." is ~3.3 s; tight clips shorten
+    # it, but only to a phrase end, otherwise it is dropped instead of cut on "and"/"do"
+    ws = _w("we are going to inject code and this code can do anything.")
+    ends = [j for j in range(2, len(ws) - 1) if ws[j]["e"] - ws[0]["s"] <= 2.6 and E.natural_end(ws, j)]
+    for j in ends:
+        assert E.norm(ws[j]["w"]) not in E._DANGLING
+    ws2 = _w("errors in what gets picked |may still degrade the model.")
+    ok = [j for j in range(2, len(ws2) - 1) if E.natural_end(ws2, j)]
+    assert ok == [4]                         # "picked" (pause after it), never "may"/"still"
