@@ -4,10 +4,11 @@ description: >-
   Skill id shortrizz:shortrizz-clipper. Load it with
   skill_view("shortrizz:shortrizz-clipper"). Turn a long video (YouTube or any
   yt-dlp URL, or a local file) into captioned vertical 9:16 shorts for YouTube
-  Shorts, TikTok and Reels: best 30-60 s moments, face-tracked reframe,
-  word-by-word captions, virality score, title, why-it-hooks and a caption with
-  hashtags. Call the shortrizz_* tools. Jobs run in the background; poll
-  shortrizz_status. Publishing is a dry-run plan only.
+  Shorts, TikTok and Reels, or into one 16:9 highlights video
+  (shortrizz_make_highlights) built from the top-scoring moments. Shorts get a
+  face-tracked reframe, word-by-word captions, a virality score, a title,
+  why-it-hooks and a caption with hashtags. Call the shortrizz_* tools. Jobs
+  run in the background; poll shortrizz_status. Publishing is a dry-run plan only.
 version: "0.2.1"
 author: mojomast
 license: MIT
@@ -63,6 +64,19 @@ you start.
    `publish_plan.json`. It never uploads. Live posting to YouTube, TikTok or
    Instagram is not implemented. Do not try to upload the clips with other tools
    unless the user explicitly asks and names the account.
+
+## Long-form highlights (16:9)
+When the user wants one horizontal video instead of a feed of vertical shorts,
+call `shortrizz_make_highlights` with `source`. Useful knobs: `duration`
+(default 180 seconds), `max_clips` (default 8), `min_score` (default 50),
+`min_seconds`/`max_seconds` (default 15/45), `order` (`chrono` by default so
+the story stays in order, or `score`), `crossfade` (default 0.4; `hard_cuts`
+for butt joins), `captions` (default on, lower third; the same `style` names),
+`loudnorm` (default on). It returns a `job_id`. Poll `shortrizz_status` the
+same way. When it finishes, report the highlights file, the duration, and each
+segment's title, score and source time. `chapters.txt` and `highlights.json`
+sit next to the video. This path does not reframe to 9:16 and does not run the
+shorts edit effects. Do not offer `shortrizz_publish_plan` for a highlights run.
 
 ## Rules
 - Do not run the CLI in a terminal when the tools are available. Do not try to

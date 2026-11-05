@@ -36,3 +36,37 @@ h3{{margin:0 44px 6px 0;font-size:16px}} .dur{{color:#999;font-size:12px}} .why{
 <div class="grid">{''.join(cards)}</div></main>
 <footer>Made with Shortrizz · {credit} · Only post clips you have the rights to.</footer></body></html>"""
     (out_dir / "index.html").write_text(doc)
+
+def write_highlights(out_dir, meta, segments, filename, duration):
+    """One 16:9 player plus the segment list (source time and score)."""
+    e = html.escape
+    rows = []
+    for s in segments:
+        rows.append(
+            f"<li><b>{e(_clock(s.get('out_start', 0)))}</b> {e(s.get('title') or '')} "
+            f"<span class='score s{int(s.get('virality_score') or 0)//25}'>{int(s.get('virality_score') or 0)}</span> "
+            f"<span class='dur'>source {e(fmt_dur(s['start']))}–{e(fmt_dur(s['end']))} · {e(fmt_dur(s.get('duration') or 0))}</span>"
+            f"<div class='why'>{e(s.get('why_it_hooks') or '')}</div></li>"
+        )
+    title = e(meta.get("title") or "highlights")
+    logo = LOGO.read_text().split("?>")[-1].replace('width="', 'data-w="', 1) if LOGO.exists() else "<b>Shortrizz</b>"
+    poster = "highlights.jpg" if (Path(out_dir) / "highlights.jpg").exists() else ""
+    doc = f"""<!doctype html><html><head><meta charset="utf-8"><title>Shortrizz · {title}</title>
+<style>body{{font-family:Inter,system-ui,sans-serif;background:#0b1020;color:#eee;margin:0}}
+header{{display:flex;align-items:center;gap:18px;padding:22px 28px}} header svg{{height:44px;width:auto}}
+.bar{{height:4px;background:linear-gradient(90deg,#8b5cf6,#ec4899,#f59e0b)}}
+main{{padding:20px 28px;max-width:960px}} video{{width:100%;background:#000;border-radius:12px}}
+li{{margin:12px 0;list-style:none}} ul{{padding:0}} .dur{{color:#999;margin-left:8px}} .why{{color:#ccc;font-size:14px}}
+.score{{display:inline-block;min-width:1.6em;text-align:center;border-radius:8px;background:#555;margin-left:8px;padding:0 6px}}
+.s3,.s4{{background:linear-gradient(135deg,#8b5cf6,#ec4899)}} .s2{{background:#f59e0b;color:#000}}
+footer{{color:#778;font-size:12px;padding:8px 28px 24px}}</style></head><body>
+<header>{logo}<span style="color:#a5b4fc">Long video in. One 16:9 highlights reel out.</span></header><div class="bar"></div>
+<main><h1>{title}</h1><p style="color:#999">{e(fmt_dur(duration))} · {len(segments)} segments</p>
+<video src="{e(filename)}" poster="{e(poster)}" controls playsinline></video>
+<ul>{''.join(rows)}</ul></main>
+<footer>Made with Shortrizz · Only post videos you have the rights to.</footer></body></html>"""
+    (Path(out_dir) / "index.html").write_text(doc)
+
+def _clock(t):
+    t = max(0.0, float(t or 0))
+    return f"{int(t // 60)}:{int(t % 60):02d}"

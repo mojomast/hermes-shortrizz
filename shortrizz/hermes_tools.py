@@ -136,9 +136,15 @@ def _job_state(job: dict) -> dict:
              "progress": {"done": prog.get("done", 0), "total": prog.get("total", 0)}}
     if prog.get("stage") == "done" and (out / "clips.json").exists():
         from shortrizz.pipeline import summary
-        state.update(status="done", ok=True, result=summary(json.loads((out / "clips.json").read_text()), out),
-                     next_step="Show the user the clip files and gallery. Offer shortrizz_render_style or "
-                               "shortrizz_publish_plan (dry run). Do not post anywhere.")
+        doc = json.loads((out / "clips.json").read_text())
+        if doc.get("format") == "highlights":
+            nxt = ("Show the user the 16:9 highlights file, its duration, and each segment's title, "
+                   "virality score and source time. chapters.txt and highlights.json sit beside the video. "
+                   "Do not post it anywhere.")
+        else:
+            nxt = ("Show the user the clip files and gallery. Offer shortrizz_render_style or "
+                   "shortrizz_publish_plan (dry run). Do not post anywhere.")
+        state.update(status="done", ok=True, result=summary(doc, out), next_step=nxt)
     elif alive:
         state.update(status="running", ok=True,
                      next_step=f"Call shortrizz_status with job_id={job['job_id']} and wait_seconds up to {MAX_WAIT}.")
@@ -257,7 +263,7 @@ def status_tool(params=None, **_kw) -> str:
         job = _load_job(str(a.get("job_id") or ""))
         wait = _num(a, "wait_seconds", 0, 0, MAX_WAIT)
     except ValueError as e:
-        return _err(str(e), "Pass the job_id returned by shortrizz_make_shorts or shortrizz_render_style.")
+        return _err(str(e), "Pass the job_id returned by shortrizz_make_shorts, shortrizz_make_highlights or shortrizz_render_style.")
     if a.get("cancel"):
         try:
             os.killpg(job["pid"], signal.SIGTERM)
@@ -270,7 +276,8 @@ def status_tool(params=None, **_kw) -> str:
 def list_styles_tool(params=None, **_kw) -> str:
     from shortrizz.captions import describe_styles
     return _out({"ok": True, **describe_styles(), "reframe_modes": list(REFRAMES),
-                 "next_step": "Pass one of these names as style to shortrizz_make_shorts or shortrizz_render_style."})
+                 "next_step": "Pass one of these names as style to shortrizz_make_shorts, "
+                              "shortrizz_make_highlights or shortrizz_render_style."})
 
 
 def render_style_tool(params=None, **_kw) -> str:
@@ -300,12 +307,81 @@ def render_style_tool(params=None, **_kw) -> str:
     return _out(st)
 
 
+def make_highlights_tool(params=None, **_kw) -> str:
+    """One 16:9 highlights reel. Same scoring as shorts; background job, poll shortrizz_status."""
+    try:
+        a = _args(params)
+        source = str(a.get("source") or "").strip()
+        if not source:
+            raise ValueError("source (a video URL or local file path) is required")
+        if not re.match(r"^https?://", source):
+            p = Path(source).expanduser()
+            if not p.is_file():
+                raise ValueError(f"local file not found: {source}")
+            source = str(p.resolve())
+        duration = _num(a, "duration", 180, 0, 14400)
+        max_clips = _num(a, "max_clips", 8, 0, 40, int)
+        min_score = _num(a, "min_score", 50, 0, 100)
+        mn = _num(a, "min_seconds", 15, 5, 300)
+        mx = _num(a, "max_seconds", 45, 5, 600)
+        if mn > mx:
+            raise ValueError("min_seconds must be <= max_seconds")
+        order = str(a.get("order") or "chrono")
+        if order not in ("chrono", "score"):
+            raise ValueError("order must be chrono or score")
+        fade = _num(a, "crossfade", 0.4, 0, 2)
+        style = str(a.get("style") or "hormozi")
+        if a.get("captions") is not False:
+            style = _check_style(style)
+        model = str(a.get("model") or "small")
+        if model not in ("tiny", "base", "small", "medium", "large-v3", "distil-large-v3"):
+            raise ValueError("model must be tiny, base, small, medium, large-v3 or distil-large-v3")
+        wait = _num(a, "wait_seconds", 0, 0, MAX_WAIT)
+        out = Path(a["out_dir"]).expanduser() if a.get("out_dir") else None
+    except ValueError as e:
+        return _err(str(e))
+    argv = ["highlights", source, "--duration", f"{duration:g}", "--max-clips", str(max_clips),
+            "--min-score", f"{min_score:g}", "--min", f"{mn:g}", "--max", f"{mx:g}",
+            "--order", order, "--crossfade", f"{fade:g}", "--style", style, "--model", model, "--json"]
+    if a.get("hard_cuts"):
+        argv.append("--hard-cuts")
+    if a.get("captions") is False:
+        argv.append("--no-captions")
+    if a.get("loudnorm") is False:
+        argv.append("--no-loudnorm")
+    if a.get("chapters") is False:
+        argv.append("--no-chapters")
+    if a.get("manifest") is False:
+        argv.append("--no-manifest")
+    if a.get("use_llm") is False:
+        argv.append("--no-llm")
+    if a.get("avoid_previous"):
+        argv.append("--avoid-previous")
+    if a.get("watermark") is True:
+        argv.append("--watermark")
+    elif a.get("watermark") is False:
+        argv.append("--no-watermark")
+    if a.get("cache_dir"):
+        argv += ["--cache", str(Path(a["cache_dir"]).expanduser())]
+    out = (out or _runs_dir() / f"highlights-{time.strftime('%Y%m%d-%H%M%S')}").resolve()
+    argv += ["--out", str(out)]
+    job = _start_job("highlights", argv, out)
+    st = _wait(job, wait)
+    st["note"] = ("Highlights uses the same download, transcript and virality scores as shorts, then joins the "
+                  "top segments into one 16:9 file. The first run transcribes the source; rendering is one "
+                  "encode per segment plus the join.")
+    return _out(st)
+
+
 def publish_plan_tool(params=None, **_kw) -> str:
     try:
         a = _args(params)
         run = Path(str(a.get("run_dir") or "")).expanduser()
         if not (run / "clips.json").is_file():
             raise ValueError("run_dir must contain clips.json")
+        kind = json.loads((run / "clips.json").read_text()).get("format")
+        if kind == "highlights":
+            raise ValueError("this run is a 16:9 highlights video, not a shorts feed")
         plats = a.get("platforms") or list(PLATFORMS)
         if isinstance(plats, str):
             plats = [p.strip() for p in plats.split(",") if p.strip()]
@@ -351,9 +427,36 @@ def tool_specs() -> list[dict]:
           "length": {"type": "string", "enum": ["default", "tight"], "description": "tight = 20-35 s clips."},
           "avoid_previous": {"type": "boolean", "description": "Skip moments earlier runs on this video already used."},
           **_EDIT_PARAMS, "wait_seconds": _WAIT}, ["source"]),
+        ("shortrizz_make_highlights", make_highlights_tool, "🎞️",
+         "Build ONE 16:9 highlights video from the highest-scoring moments of a long video (same transcript "
+         "and virality scores as shorts, no vertical crop). Target duration, max segment count and minimum "
+         "score; chronological order by default. Short audio and video crossfade, optional lower-third "
+         "captions. Starts a background job and returns job_id; poll shortrizz_status. Only for content "
+         "the user has rights to.",
+         {"source": {"type": "string", "description": "Video URL or local file path."},
+          "duration": {"type": "number", "description": "Target total length in seconds. Default 180. 0 = no duration cap."},
+          "max_clips": {"type": "integer", "minimum": 0, "maximum": 40, "description": "Max segments. Default 8. 0 = no count cap."},
+          "min_score": {"type": "number", "description": "Drop segments scored below this (0-100). Default 50."},
+          "min_seconds": {"type": "number", "description": "Shortest segment. Default 15."},
+          "max_seconds": {"type": "number", "description": "Longest segment. Default 45."},
+          "order": {"type": "string", "enum": ["chrono", "score"], "description": "chrono (default) keeps story order; score plays the strongest first."},
+          "crossfade": {"type": "number", "description": "Audio and video crossfade in seconds. Default 0.4. 0 = hard cuts."},
+          "hard_cuts": {"type": "boolean", "description": "Join with hard cuts instead of a crossfade. Default false."},
+          "captions": {"type": "boolean", "description": "Burn lower-third captions. Default true."},
+          "loudnorm": {"type": "boolean", "description": "Normalise each segment to -14 LUFS. Default true."},
+          "chapters": {"type": "boolean", "description": "Write chapters.txt with source time and score. Default true."},
+          "manifest": {"type": "boolean", "description": "Write highlights.json. Default true."},
+          "style": style,
+          "model": {"type": "string", "description": "faster-whisper size. Default small."},
+          "use_llm": {"type": "boolean", "description": "false = heuristic picks only. Default true."},
+          "avoid_previous": {"type": "boolean", "description": "Skip moments earlier runs on this video already used."},
+          "out_dir": {"type": "string", "description": "Output folder. Default ~/shortrizz-runs/highlights-<time>."},
+          "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo. Omit to use the user's setting (off by default)."},
+          "cache_dir": {"type": "string", "description": "Download/transcript cache. Default ~/.cache/shortrizz."},
+          "wait_seconds": _WAIT}, ["source"]),
         ("shortrizz_status", status_tool, "⏳",
-         "Progress or result of a Shortrizz job. When done returns clip paths, titles, virality scores, "
-         "durations, why-it-hooks and captions with hashtags.",
+         "Progress or result of a Shortrizz job. When done, returns each short (path, title, score, "
+         "duration) or, for a highlights job, the 16:9 file and its segments.",
          {"job_id": {"type": "string"}, "wait_seconds": _WAIT,
           "cancel": {"type": "boolean", "description": "Stop the job."}}, ["job_id"]),
         ("shortrizz_list_styles", list_styles_tool, "🎨", "List caption style presets and reframe modes.", {}, []),

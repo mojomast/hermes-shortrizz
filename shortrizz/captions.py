@@ -44,6 +44,20 @@ def load_style(name_or_path):
     base.update(d)
     return base
 
+def for_landscape(style, width=1920, height=1080):
+    """Retune a vertical caption style for a 16:9 frame: smaller type, lower third.
+
+    Preset sizes are tuned for a 1920-tall short. Scale them to this frame and anchor
+    the line in the lower third (pos_y 0.82) instead of the vertical safe-zone spot.
+    """
+    st = dict(style)
+    scaled = int(round(st["size"] * (height / 1920) * 1.25))
+    st["size"] = max(28, min(scaled, max(28, int(width * 0.08))))
+    st["outline_w"] = max(2, int(round(st["outline_w"] * (height / 1920) * 1.25)))
+    st["shadow"] = max(0, int(round(st.get("shadow", 0) * (height / 1920) * 1.25)))
+    st["pos_y"] = 0.82
+    return st
+
 def ass_color(hexstr, alpha=0):
     h = hexstr.lstrip("#")
     r, g, b = h[0:2], h[2:4], h[4:6]
