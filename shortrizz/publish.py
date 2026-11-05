@@ -48,7 +48,11 @@ PUBLISHERS = {p.name: p for p in (YouTubeShorts(), TikTok(), InstagramReels())}
 
 def plan(out_dir, platforms, start=None, every_hours=24, live=False):
     out_dir = Path(out_dir)
-    clips = json.loads((out_dir / "clips.json").read_text())["clips"]
+    doc = json.loads((out_dir / "clips.json").read_text())
+    if doc.get("format") == "highlights":
+        raise SystemExit("publish plans a shorts feed. This folder is one 16:9 highlights video "
+                         "(highlights.mp4); upload that file yourself if you have the rights.")
+    clips = doc["clips"]
     start = start or (dt.datetime.now().astimezone().replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1))
     reqs = []
     for i, c in enumerate(sorted(clips, key=lambda c: -c["virality_score"])):

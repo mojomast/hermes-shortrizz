@@ -22,7 +22,7 @@ captions in the Hormozi, MrBeast or Abdaal style. You can use it as a CLI or as 
 
 <sub>A sibling of <a href="https://github.com/mojomast/comfyrizz">Comfyrizz</a>. Comfyrizz makes explainers. Shortrizz clips them.</sub>
 
-[Quickstart](#quickstart) · [Features](#features) · [Hermes plugin](#hermes-plugin) · [Styles](#caption-styles) · [How it works](#how-it-works) · [Limitations](#limitations)
+[Quickstart](#quickstart) · [Features](#features) · [Highlights](#long-form-highlights) · [Hermes plugin](#hermes-plugin) · [Styles](#caption-styles) · [How it works](#how-it-works) · [Limitations](#limitations)
 
 </div>
 
@@ -53,6 +53,7 @@ captions in the Hormozi, MrBeast or Abdaal style. You can use it as a CLI or as 
 ## Features
 
 - **One command, a feed of clips.** For example: `shortrizz URL --count 5 --min 30 --max 60 --style hormozi`.
+- **Or one 16:9 highlights reel.** `shortrizz highlights URL` joins the top-scoring moments into a single horizontal video. See [Long-form highlights](#long-form-highlights).
 - **LLM clip picker.** It uses any OpenAI-compatible endpoint, with OpenCode Go `deepseek-v4.1-flash` as the
   default. If no key is set, a heuristic picker takes over, so it works offline.
 - **Speaker-aware reframing.** Faces are detected with YuNet. The active speaker is found from mouth motion
@@ -88,6 +89,9 @@ shortrizz SOURCE [--count 5] [--min 30] [--max 60] [--style hormozi|mrbeast|abda
                  [--out DIR] [--model small] [--language en] [--reframe auto|face|center|letterbox]
                  [--no-llm] [--fresh] [--preset medium] [--schedule youtube,tiktok,instagram] [--json]
                  [--watermark | --no-watermark]
+shortrizz highlights SOURCE [--duration 180] [--max-clips 8] [--min-score 50]
+                 [--min 15] [--max 45] [--order chrono|score] [--crossfade 0.4 | --hard-cuts]
+                 [--style hormozi] [--no-captions] [--out DIR] [--no-llm] [--json]
 shortrizz restyle RUN_DIR --style mrbeast [--out DIR] [--watermark]  # re-render a finished run with another style
 shortrizz publish RUN_DIR [--platforms youtube,tiktok]    # write publish_plan.json (dry run)
 shortrizz styles                                          # list presets
@@ -102,6 +106,33 @@ shortrizz styles                                          # list presets
 | `SHORTRIZZ_MODELS` | `~/.cache/shortrizz/models` | YuNet and Whisper weights |
 | `SHORTRIZZ_RUNS` | `~/shortrizz-runs` | default output folder for plugin runs |
 
+## Long-form highlights
+
+`shortrizz highlights` builds **one** 16:9 video from several high-scoring moments of the same source. It runs the same download, faster-whisper transcript and virality scoring as the shorts command (LLM, or the heuristic when no key is set), snaps each segment to a sentence or a pause so speech is not cut mid-word, then joins the picks.
+
+```bash
+shortrizz highlights "https://www.youtube.com/watch?v=VIDEO_ID" \
+    --duration 180 --max-clips 8 --min-score 50 --order chrono --style hormozi --out ./out
+```
+
+| flag | default | meaning |
+|---|---|---|
+| `--duration` | 180 | Target length in seconds. Segments are kept whole, so the file may run a few seconds past this. `0` turns the cap off. |
+| `--max-clips` | 8 | Stop after this many segments. `0` turns the cap off. With both caps off, the reel uses 8. |
+| `--min-score` | 50 | Drop anything the scorer marked below this (0–100). |
+| `--min` / `--max` | 15 / 45 | Length of each segment, in seconds. |
+| `--order` | `chrono` | `chrono` plays source order so the story flows. `score` plays the strongest first. |
+| `--crossfade` | 0.4 | Audio and video crossfade at each join, in seconds. |
+| `--hard-cuts` | off | Butt-join with no crossfade. |
+| `--style` / `--no-captions` | hormozi, captions on | Same caption presets as shorts, drawn in the lower third of the 16:9 frame. |
+| `--no-loudnorm` | loudness on | Each segment is normalised to −14 LUFS before the join. |
+| `--max-width` | 1920 | Cap the frame width. A 16:9 source keeps its own size up to this. Wider sources are scaled down. Other aspect ratios are padded, not cropped. |
+| `--no-chapters` / `--no-manifest` | both written | `chapters.txt` lists each segment's output time, score and source time. `highlights.json` is the machine-readable manifest. |
+
+The output folder holds `highlights.mp4`, `highlights.jpg`, `chapters.txt`, `highlights.json`, `clips.json` and `index.html`. Segments that overlap, or that repeat the same words, are dropped. The reel does **not** run the vertical reframe or the shorts edit pass (dead-air tightening, hook text, cold open, zoom, emoji). `shortrizz restyle` and `shortrizz publish` stay on the shorts feed.
+
+The Hermes tool is `shortrizz_make_highlights`. It takes the same knobs (`duration`, `max_clips`, `min_score`, `order`, `crossfade`, `hard_cuts`, `captions`, `style`, …) and returns a `job_id` to poll with `shortrizz_status`.
+
 ## Hermes plugin
 
 The repo root is a Hermes plugin. It contains `plugin.yaml`, the `__init__.py` entry point, and the skill in
@@ -115,6 +146,7 @@ hermes plugins doctor shortrizz
 | Tool | Job |
 |---|---|
 | `shortrizz_make_shorts` | Starts a job for `source` with `count`, `min_seconds`, `max_seconds`, `style`, `reframe`, `model`, `use_llm`, `watermark`, `out_dir` and `wait_seconds`. Returns a `job_id` and `out_dir`. |
+| `shortrizz_make_highlights` | Starts a job that builds one 16:9 highlights video from the top-scoring moments. Knobs: `duration`, `max_clips`, `min_score`, `min_seconds`, `max_seconds`, `order`, `crossfade`, `hard_cuts`, `captions`, `style`, `loudnorm`, `model`, `use_llm`, `watermark`, `out_dir`, `wait_seconds`. |
 | `shortrizz_status` | Reports a job's progress (download, transcribe, select, render n/total). When the job is done, it returns the clip paths, titles, scores, durations, why-it-hooks notes and captions. `cancel: true` stops the job. |
 | `shortrizz_list_styles` | Lists the caption presets and reframe modes. |
 | `shortrizz_render_style` | Re-renders a finished `run_dir` in another `style`, without downloading, transcribing or calling the LLM again. Runs as a background job. |
@@ -238,6 +270,8 @@ flowchart LR
   O -.-> P[publish plan<br/>dry run]
 ```
 
+`shortrizz highlights` branches off after the same transcript and score. It skips the face-tracked crop and the per-clip shorts renderer, fits every chosen segment into one 16:9 frame, and crossfades them into `highlights.mp4`.
+
 On 8 CPU cores, an 18.5-minute 1080p podcast took about 28 s to download and 1 min 46 s to transcribe with
 Whisper `small` in int8 (float32, now the default, is roughly 1.5–3× slower). The LLM pick took about 45–80 s, and rendering took about 25 s per 45 s clip. A full first
 run took about 5.5 minutes. A restyle takes about 2 minutes.
@@ -263,6 +297,11 @@ Whisper runs in **float32** on CPU by default: int8 decoding silently dropped mi
 - The edit renderer processes frames in Python; expect roughly 1 minute per 40 s clip on 8 cores at 30 fps.
 - Live posting isn't implemented. `shortrizz/publish.py` documents the YouTube Data API, the TikTok Content
   Posting API and the Instagram Graph API hooks.
+- Highlights keeps the source framing and joins whole scored segments. It does not reframe to 9:16, tighten
+  dead air inside a segment, or apply the shorts effects (hook text, cold open, zoom, emoji, narrator).
+- A highlights file can run a few seconds past `--duration`, because a segment is never chopped to hit the
+  number. Each crossfade shortens the total by about its length.
+- `shortrizz restyle` and `shortrizz publish` are for a shorts folder. A highlights run is one 16:9 file.
 
 ## Brand
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Long-form highlights.** `shortrizz highlights SOURCE` (Hermes tool `shortrizz_make_highlights`) builds one 16:9 video from the top-scoring moments of a source. It reuses the existing transcript, virality scores and sentence-boundary snap. Target duration, max segment count and a minimum score; overlapping and near-duplicate segments are dropped. Play order is chronological by default, or `--order score`. The source framing is kept (no vertical crop); resolution, frame rate and loudness are normalised; segments join with a short audio and video crossfade (`--crossfade`, or `--hard-cuts`). Captions are optional and laid out in the lower third (`--style`, `--no-captions`). Writes `chapters.txt` (output time, score, source time) and `highlights.json`.
+
 ## [0.2.1] - 2026-11-04
 
 ### Fixed

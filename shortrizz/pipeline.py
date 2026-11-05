@@ -2,7 +2,7 @@
 import json, re, time
 from pathlib import Path
 from .util import log, ffprobe_duration
-from . import download, transcribe as T, clipselect, captions, render, gallery, publish
+from . import download, transcribe as T, clipselect, captions, render, gallery, publish, highlights as HL
 
 DEFAULT_CACHE = "~/.cache/shortrizz"
 
@@ -164,6 +164,9 @@ def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=N
     t0 = time.time()
     run_dir = Path(run_dir).expanduser().resolve()
     prev = json.loads((run_dir / "clips.json").read_text())
+    if prev.get("format") == "highlights":
+        raise SystemExit("restyle renders vertical shorts. This folder is a 16:9 highlights video; "
+                         "re-run `shortrizz highlights` with another --style.")
     out = Path(out).expanduser().resolve() if out else run_dir.parent / f"{run_dir.name}-{Path(style).stem}"
     out.mkdir(parents=True, exist_ok=True)
     src = Path(prev["source"]["video_path"])
@@ -201,8 +204,122 @@ def _word_range(words, s, e):
 def summary(doc, out_dir=None):
     """Compact result for agents."""
     out_dir = Path(out_dir or doc["out_dir"])
-    return {"out_dir": str(out_dir), "gallery": str(out_dir / "index.html"), "clips_json": str(out_dir / "clips.json"),
-            "source_title": doc["source"].get("title"), "timings_sec": doc.get("timings_sec"),
-            "clips": [{"file": str(out_dir / c["file"]), "title": c["title"], "virality_score": c["virality_score"],
-                       "duration": c["duration"], "why_it_hooks": c["why_it_hooks"],
-                       "caption": f"{c['caption']} {' '.join(c['hashtags'])}".strip()} for c in doc["clips"]]}
+    hl = doc.get("format") == "highlights"
+    clips = []
+    for c in doc.get("clips", []):
+        rel = c.get("file") or doc.get("file")
+        item = {"file": str(out_dir / rel) if rel else None, "title": c.get("title"),
+                "virality_score": c.get("virality_score"), "duration": c.get("duration"),
+                "why_it_hooks": c.get("why_it_hooks", ""),
+                "caption": f"{c.get('caption', '')} {' '.join(c.get('hashtags') or [])}".strip()}
+        if hl:
+            item.update(source_start=c.get("start"), source_end=c.get("end"), out_start=c.get("out_start"))
+        clips.append(item)
+    result = {"out_dir": str(out_dir), "gallery": str(out_dir / "index.html"), "clips_json": str(out_dir / "clips.json"),
+              "source_title": doc.get("source", {}).get("title"), "timings_sec": doc.get("timings_sec"), "clips": clips}
+    if hl:
+        result.update(format="highlights", file=str(out_dir / doc["file"]) if doc.get("file") else None,
+                      duration=doc.get("duration"), width=doc.get("width"), height=doc.get("height"),
+                      order=doc.get("order"),
+                      chapters=str(out_dir / doc["chapters"]) if doc.get("chapters") else None,
+                      manifest=str(out_dir / doc["manifest"]) if doc.get("manifest") else None)
+    return result
+
+def highlights(source, out, target=180, max_clips=8, min_score=50, min_len=15, max_len=45, order="chrono",
+               crossfade=0.4, captions=True, style="hormozi", cache=DEFAULT_CACHE, model="small", language=None,
+               use_llm=True, fresh=False, preset="medium", watermark=None, loudnorm=True, chapters=True,
+               manifest=True, max_width=1920, exclude=None, avoid_previous=False, keep_ass=False, crf=20):
+    """One 16:9 highlights reel from the same scored moments the shorts pipeline uses."""
+    if order not in ("chrono", "score"):
+        raise SystemExit("order must be chrono or score")
+    if crossfade < 0 or crossfade > 2:
+        raise SystemExit("crossfade must be between 0 and 2 seconds")
+    if min_len > max_len:
+        raise SystemExit("min segment length must be <= max")
+    source = str(source)
+    t0 = time.time()
+    out = Path(out).expanduser().resolve(); out.mkdir(parents=True, exist_ok=True)
+    cache = Path(cache).expanduser(); cache.mkdir(parents=True, exist_ok=True)
+    prog = Progress(out)
+    # the `captions` argument shadows the captions module imported above
+    from . import captions as caption_mod
+    look = caption_mod.load_style(style) if captions else None
+    from .watermark import settings as wm_settings
+    wm = wm_settings(watermark)
+    prog("download")
+    src, meta = download.fetch(source, cache)
+    timings = {"download": time.time() - t0}
+    prog("transcribe")
+    tr = T.transcribe(src, cache, model, language)
+    timings["transcribe"] = time.time() - t0 - sum(timings.values())
+    words = T.all_words(tr)
+    if not words:
+        raise SystemExit("no speech found in source")
+    total = ffprobe_duration(src)
+    mx = min(max_len, total); mn = min(min_len, mx)
+    prog("select")
+    used_file = cache / f"{Path(src).stem}.used.json"
+    ex = previous_ranges(exclude or [], used_file if avoid_previous else None)
+    if ex:
+        log(f"avoiding {len(ex)} range(s) used by earlier runs")
+    ask = max(12, int(max_clips or 8) * 3)
+    clips = clipselect.select_highlights(
+        tr, mn, mx, target=target, max_clips=max_clips, min_score=min_score, order=order,
+        title=meta.get("title", ""), use_llm=use_llm,
+        cache_file=None if fresh or not use_llm else cache / f"{Path(src).stem}.highlights.{ask}-{mn:g}-{mx:g}.{_tr_hash(tr)}.json",
+        exclude=ex)
+    if not clips:
+        raise SystemExit("no highlight segments matched the duration, count and score filters. "
+                         "Lower --min-score or --min, or raise --duration / --max-clips.")
+    if len(clips) < 2:
+        log("only one segment cleared the filters; the file will be a single stretch")
+    _record_used(used_file, clips, out)
+    timings["select"] = time.time() - t0 - sum(timings.values())
+    dest = out / "highlights.mp4"
+    info = HL.render_highlights(src, clips, dest, words=words, style=look, crossfade=crossfade,
+                                loudnorm=loudnorm, preset=preset, crf=crf, max_width=max_width,
+                                watermark=wm, keep_ass=keep_ass, progress=prog)
+    timings["render"] = time.time() - t0 - sum(timings.values())
+    try:
+        render.thumbnail(dest, out / "highlights.jpg", min(1.5, info["duration"] / 2))
+    except Exception as e:
+        log(f"thumbnail skipped ({e})")
+    results = []
+    for seg, meta_seg in zip(clips, info["segments"]):
+        results.append({**{k: seg.get(k) for k in ("start", "end", "title", "virality_score", "why_it_hooks",
+                                                    "caption", "hashtags", "method", "word_range")},
+                        "file": dest.name, "duration": meta_seg["duration"],
+                        "out_start": meta_seg["out_start"], "out_end": meta_seg["out_end"],
+                        "transcript": seg.get("transcript", "")})
+    for seg in results:
+        seg["hashtags"] = seg.get("hashtags") or []
+    ch_name = "chapters.txt" if chapters else None
+    man_name = "highlights.json" if manifest else None
+    if ch_name:
+        (out / ch_name).write_text(HL.chapters_text(results))
+    manifest_body = {"file": dest.name, "duration": info["duration"], "width": info["width"],
+                     "height": info["height"], "fps": info["fps"], "order": order,
+                     "crossfade_sec": info["crossfade"], "audio_lufs": info["audio_lufs"],
+                     "captions": bool(captions), "style": style if captions else None,
+                     "segments": [{"index": i, "title": s["title"], "virality_score": s["virality_score"],
+                                   "why_it_hooks": s.get("why_it_hooks", ""),
+                                   "source_start": s["start"], "source_end": s["end"],
+                                   "out_start": s["out_start"], "out_end": s["out_end"],
+                                   "duration": s["duration"]} for i, s in enumerate(results, 1)]}
+    if man_name:
+        (out / man_name).write_text(json.dumps(manifest_body, indent=2, ensure_ascii=False))
+    meta["video_path"] = str(src)
+    doc = {"tool": "shortrizz", "format": "highlights", "out_dir": str(out), "file": dest.name,
+           "duration": info["duration"], "width": info["width"], "height": info["height"], "fps": info["fps"],
+           "order": order, "crossfade_sec": info["crossfade"], "audio_lufs": info["audio_lufs"],
+           "chapters": ch_name, "manifest": man_name, "source": meta, "source_duration": round(total, 1),
+           "settings": {"target": target, "max_clips": max_clips, "min_score": min_score, "min": min_len,
+                        "max": max_len, "order": order, "crossfade": crossfade, "captions": bool(captions),
+                        "style": style, "model": model, "llm": use_llm, "loudnorm": bool(loudnorm),
+                        "max_width": max_width, "cache": str(cache), "watermark": wm["watermark"]},
+           "timings_sec": {k: round(v, 1) for k, v in timings.items()}, "clips": results}
+    (out / "clips.json").write_text(json.dumps(doc, indent=2, ensure_ascii=False))
+    gallery.write_highlights(out, meta, results, dest.name, info["duration"])
+    prog("done", len(results), len(results), out_dir=str(out))
+    log(f"done in {time.time() - t0:.0f}s -> {dest}")
+    return doc

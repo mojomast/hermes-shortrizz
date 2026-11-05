@@ -10,9 +10,10 @@ description: >-
   false starts with a validated AI edit pass, adds a hook line, normalises
   loudness and keeps text in platform safe zones and off faces. Opt-in effects:
   cold open, AI narrator intro/outro, punch-in zooms, loop endings, emoji and
-  sound effects; optional watermark. Writes clips.json plus a gallery.
-  Renders run as background jobs; poll shortrizz_status. Publishing is a
-  dry-run plan only; nothing is uploaded. Only clip content you have rights to.
+  sound effects; optional watermark. It can also build one 16:9 highlights
+  video from the top-scoring moments (no vertical crop). Writes clips.json plus
+  a gallery. Renders run as background jobs; poll shortrizz_status. Publishing
+  is a dry-run plan only; nothing is uploaded. Only clip content you have rights to.
 author: mojomast
 license: MIT
 homepage: https://github.com/mojomast/hermes-shortrizz
@@ -26,6 +27,7 @@ manifest_version: 2
 api_version: 1
 provides_tools:
   - shortrizz_make_shorts
+  - shortrizz_make_highlights
   - shortrizz_status
   - shortrizz_list_styles
   - shortrizz_render_style
