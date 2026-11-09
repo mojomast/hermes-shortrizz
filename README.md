@@ -14,7 +14,7 @@ Paste a URL or a local file. Shortrizz transcribes it on CPU, picks moments, and
 It is a CLI and a Hermes plugin (`shortrizz`), with a Desktop pane for review before any encode.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
-[![Version 0.5.0](https://img.shields.io/badge/version-0.5.0-8b5cf6)](plugin.yaml)
+[![Version 0.5.1](https://img.shields.io/badge/version-0.5.1-8b5cf6)](plugin.yaml)
 [![Hermes >=0.23.0](https://img.shields.io/badge/Hermes-%3E%3D0.23.0-111827)](plugin.yaml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Tests](https://img.shields.io/badge/tests-pytest%20%2B%20node-0ea5e9)](#development)
@@ -186,7 +186,7 @@ Edit flags on `shortrizz_make_shorts` and `shortrizz_render_style` (highlights d
 
 ### Bundled skill
 
-`skills/shortrizz-clipper/SKILL.md` is registered as skill name `shortrizz-clipper`. The id inside the file is **`shortrizz:shortrizz-clipper`** (version 0.5.0). The agent loads it with `skill_view("shortrizz:shortrizz-clipper")`. The skill tells the agent to call the tools, poll `shortrizz_status`, refuse uploads, and send the user to Studio when they want to review picks first. It says not to shell out to the CLI when the tools are available.
+`skills/shortrizz-clipper/SKILL.md` is registered as skill name `shortrizz-clipper`. The id inside the file is **`shortrizz:shortrizz-clipper`** (version 0.5.1). The agent loads it with `skill_view("shortrizz:shortrizz-clipper")`. The skill tells the agent to call the tools, poll `shortrizz_status`, refuse uploads, and send the user to Studio when they want to review picks first. It says not to shell out to the CLI when the tools are available.
 
 ## Pipeline
 
@@ -385,7 +385,7 @@ The mark is a 9:16 phone with a play button, cut by one diagonal: a clip taken o
 
 ## Changelog and license
 
-History of 0.1.0 through 0.5.0 is in [CHANGELOG.md](CHANGELOG.md). Version 0.5.0 adds Shortrizz Studio. Version 0.4.0 is the secret-scope, path-confinement, and picks-file release. Version 0.3.0 is highlights.
+History of 0.1.0 through 0.5.1 is in [CHANGELOG.md](CHANGELOG.md). Version 0.5.1 is the README for 0.5.0, with the Studio screenshots, and the true-peak text corrected to −1.5 dBTP. Version 0.5.0 adds Shortrizz Studio. Version 0.4.0 is the secret-scope, path-confinement, and picks-file release. Version 0.3.0 is highlights.
 
 Code is [MIT](LICENSE), © 2026 Kyle Durepos ([mojomast](https://github.com/mojomast)).
 

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-09
+
+### Changed
+- README rewrite for v0.5.0, with the Studio screenshots (`docs/images/studio-onboarding.png`, `studio-storyboard.png`, `studio-render.png`).
+- True-peak help text and the edit-list `true_peak` field corrected to -1.5 dBTP, matching the encoder's `loudnorm=I=-14:TP=-1.5`.
+
 ## [0.5.0] - 2026-11-09
 
 ### Added
