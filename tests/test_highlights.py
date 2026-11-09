@@ -163,6 +163,7 @@ def test_highlights_cli_and_plugin(monkeypatch, tmp_path):
     assert seen["target"] == 90 and seen["max_clips"] == 4 and seen["order"] == "score"
     assert seen["crossfade"] == 0 and seen["captions"] is False and seen["min_score"] == 70
 
+    monkeypatch.setenv("SHORTRIZZ_RUNS", str(tmp_path))
     monkeypatch.setattr(H, "_start_job", lambda kind, argv, out: seen.update(kind=kind, argv=argv) or
                         {"job_id": "highlights-x", "kind": kind, "pid": 1, "out_dir": str(out),
                          "log": str(out / "l"), "started": 0})
@@ -284,6 +285,13 @@ def test_pipeline_highlights_on_sample_is_16x9_with_two_segments(monkeypatch, tm
     man = json.loads((out / "highlights.json").read_text())
     assert len(man["segments"]) == len(doc["clips"])
     assert abs(man["width"] / man["height"] - 16 / 9) < 0.02
+    picks_doc = json.loads((out / "picks.json").read_text())
+    assert picks_doc["version"] == 1 and picks_doc["kind"] == "highlights"
+    assert (out / "picks.v1.json").is_file()
+    assert picks_doc["picks"] and len(picks_doc["picks"]) == len(doc["clips"])
+    for pick in picks_doc["picks"]:
+        still = out / pick["still"]
+        assert still.is_file() and still.stat().st_size > 100
     probe = _probe(mp4)
     video = next(s for s in probe["streams"] if s["codec_type"] == "video")
     audio = next(s for s in probe["streams"] if s["codec_type"] == "audio")

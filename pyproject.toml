@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-shortrizz"
-version = "0.3.0"
+version = "0.4.0"
 description = "Shortrizz: self-hosted AI clipper. Long video in, captioned 9:16 shorts or one 16:9 highlights reel out. CLI + Hermes plugin."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,8 +20,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tts = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
-dev = ["pytest>=8,<10", "pyyaml>=6,<7"]
+tts = ["kokoro-onnx>=0.4,<1", "soundfile>=0.12"]
+dev = ["pytest>=8,<10", "pyyaml>=6,<7", "tiktoken>=0.7,<1"]
 
 [project.urls]
 Homepage = "https://github.com/mojomast/hermes-shortrizz"

@@ -64,7 +64,7 @@ captions in the Hormozi, MrBeast or Abdaal style. You can use it as a CLI or as 
 - **Caching.** Downloads, transcripts and LLM picks are cached, so re-rendering in another style is fast.
 - **Posting plan.** A pluggable `publish` interface for YouTube, TikTok and Instagram. Live posting is
   deliberately not implemented, so it only writes a plan.
-- **Hermes plugin.** Five tools and an agent skill. Long renders run as background jobs.
+- **Hermes plugin.** Six tools and an agent skill. Long renders run as background jobs.
 - **Optional watermark.** A small Shortrizz logo in a corner, off by default. See [Watermark](#watermark-off-by-default).
 
 ## Quickstart
@@ -85,13 +85,14 @@ The YuNet face model (230 KB) and the Whisper weights download on first use to `
 ## CLI
 
 ```
-shortrizz SOURCE [--count 5] [--min 30] [--max 60] [--style hormozi|mrbeast|abdaal|my.json]
+shortrizz [SOURCE] [--count 5] [--min 30] [--max 60] [--style hormozi|mrbeast|abdaal|my.json]
                  [--out DIR] [--model small] [--language en] [--reframe auto|face|center|letterbox]
                  [--no-llm] [--fresh] [--preset medium] [--schedule youtube,tiktok,instagram] [--json]
-                 [--watermark | --no-watermark]
-shortrizz highlights SOURCE [--duration 180] [--max-clips 8] [--min-score 50]
+                 [--select-only] [--picks picks.json] [--watermark | --no-watermark]
+shortrizz highlights [SOURCE] [--duration 180] [--max-clips 8] [--min-score 50]
                  [--min 15] [--max 45] [--order chrono|score] [--crossfade 0.4 | --hard-cuts]
                  [--style hormozi] [--no-captions] [--out DIR] [--no-llm] [--json]
+                 [--select-only] [--picks picks.json]
 shortrizz restyle RUN_DIR --style mrbeast [--out DIR] [--watermark]  # re-render a finished run with another style
 shortrizz publish RUN_DIR [--platforms youtube,tiktok]    # write publish_plan.json (dry run)
 shortrizz styles                                          # list presets
@@ -99,12 +100,12 @@ shortrizz styles                                          # list presets
 
 | env var | default | meaning |
 |---|---|---|
-| `OPENCODE_GO_API_KEY` | read from `$HERMES_HOME/.env` if it isn't already set | LLM key |
-| `SHORTRIZZ_ENV_FILE` | `$HERMES_HOME/.env` or `~/.hermes/.env` | dotenv file to load the key from |
+| `OPENCODE_GO_API_KEY` | unset | LLM key. Hermes supplies it through the secret scope (`requires_env`). The CLI reads this name from the environment. Shortrizz does not open a dotenv file. |
 | `SHORTRIZZ_LLM_BASE_URL` | `https://opencode.ai/zen/go/v1` | OpenAI-compatible base URL |
 | `SHORTRIZZ_LLM_MODEL` | `deepseek-v4.1-flash` | model |
 | `SHORTRIZZ_MODELS` | `~/.cache/shortrizz/models` | YuNet and Whisper weights |
-| `SHORTRIZZ_RUNS` | `~/shortrizz-runs` | default output folder for plugin runs |
+| `SHORTRIZZ_RUNS` | `~/shortrizz-runs` | plugin `out_dir` and `picks_path` must stay inside this folder |
+| `SHORTRIZZ_CACHE` | `~/.cache/shortrizz` | plugin `cache_dir` must stay inside this folder |
 
 ## Long-form highlights
 
@@ -145,12 +146,14 @@ hermes plugins doctor shortrizz
 
 | Tool | Job |
 |---|---|
-| `shortrizz_make_shorts` | Starts a job for `source` with `count`, `min_seconds`, `max_seconds`, `style`, `reframe`, `model`, `use_llm`, `watermark`, `out_dir` and `wait_seconds`. Returns a `job_id` and `out_dir`. |
-| `shortrizz_make_highlights` | Starts a job that builds one 16:9 highlights video from the top-scoring moments. Knobs: `duration`, `max_clips`, `min_score`, `min_seconds`, `max_seconds`, `order`, `crossfade`, `hard_cuts`, `captions`, `style`, `loudnorm`, `model`, `use_llm`, `watermark`, `out_dir`, `wait_seconds`. |
-| `shortrizz_status` | Reports a job's progress (download, transcribe, select, render n/total). When the job is done, it returns the clip paths, titles, scores, durations, why-it-hooks notes and captions. `cancel: true` stops the job. |
+| `shortrizz_make_shorts` | Starts a job for `source` with `count`, `min_seconds`, `max_seconds`, `style`, `reframe`, `model`, `use_llm`, `watermark`, `out_dir` and `wait_seconds`. `stage` is `all` (default), `select` or `render`. `render` also takes `picks_path`. Returns a `job_id` and `out_dir`. |
+| `shortrizz_make_highlights` | Starts a job that builds one 16:9 highlights video from the top-scoring moments. Knobs: `duration`, `max_clips`, `min_score`, `min_seconds`, `max_seconds`, `order`, `crossfade`, `hard_cuts`, `captions`, `style`, `loudnorm`, `model`, `use_llm`, `watermark`, `out_dir`, `wait_seconds`, plus `stage` and `picks_path`. |
+| `shortrizz_status` | Reports a job's progress (download, transcribe, select, render n/total). When the job is done, it returns the clip paths, titles, scores, durations, why-it-hooks notes and captions. `stage: picks_ready` means `picks.json` and stills are ready and nothing has been encoded. `cancel: true` stops the job. |
 | `shortrizz_list_styles` | Lists the caption presets and reframe modes. |
 | `shortrizz_render_style` | Re-renders a finished `run_dir` in another `style`, without downloading, transcribing or calling the LLM again. Runs as a background job. |
 | `shortrizz_publish_plan` | Writes `publish_plan.json` as a dry run for YouTube Shorts, TikTok and Instagram Reels. It never uploads anything. |
+
+**Select, then render.** `shortrizz SOURCE --select-only` (tool `stage: "select"`) writes `<run>/picks.json`, a `picks.vN.json` snapshot, and `stills/<id>.jpg` for each pick, then stops before any encode. Edit the picks (trim `start`/`end`, `title`, `caption_style`, `enabled`, `order`) and render with `shortrizz --picks <run>/picks.json` (tool `stage: "render"`, `picks_path`). Omitting `--out` renders into the picks folder. The default one-shot command still selects and encodes in one run, and also writes `picks.json`. The file format is [docs/PICKS_CONTRACT.md](docs/PICKS_CONTRACT.md). Plugin `out_dir` and `picks_path` must resolve inside `SHORTRIZZ_RUNS`; `cache_dir` must resolve inside `SHORTRIZZ_CACHE`. The CLI `--out` path is not confined, so `shortrizz URL --out ./out` still works.
 
 **Long jobs.** Rendering takes minutes, so each job runs as a detached `python -m shortrizz` process and reports
 progress in `out_dir/progress.json`. A tool call returns right away, or after `wait_seconds` (at most 280 s,

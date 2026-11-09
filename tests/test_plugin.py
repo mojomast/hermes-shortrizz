@@ -31,6 +31,23 @@ def test_manifest_matches_registered_tools_and_skill():
     for dep in manifest["python_dependencies"]:
         assert dep in py and "<" in dep  # pinned with an upper bound, in step with pyproject
 
+def test_plugin_yaml_declares_version_tools_and_secret():
+    from shortrizz import __version__
+    from shortrizz.secrets import DECLARED_SECRETS
+    manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text())
+    assert manifest["name"] == "shortrizz"
+    assert manifest["version"] == __version__
+    assert manifest["provides_hooks"] == []
+    assert manifest["provides_tools"] == list(H.TOOL_NAMES)
+    assert len(H.TOOL_NAMES) == 6
+    env = manifest["requires_env"]
+    assert [item["name"] for item in env] == list(DECLARED_SECRETS) == ["OPENCODE_GO_API_KEY"]
+    item = env[0]
+    assert item["secret"] is True
+    assert item["name"].isupper() and item["name"].replace("_", "").isalnum()
+    assert "Hermes .env" not in manifest["description"]
+    assert "kokoro-onnx>=0.4,<1" in (ROOT / "pyproject.toml").read_text()
+
 def test_register_does_not_import_heavy_modules():
     for m in ("cv2", "faster_whisper"):
         sys.modules.pop(m, None)

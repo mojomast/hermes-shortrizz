@@ -43,6 +43,7 @@ def test_overlay_stays_in_top_right_and_blends():
 
 def test_plugin_param_maps_to_flag(monkeypatch, tmp_path):
     from shortrizz import hermes_tools as H
+    monkeypatch.setenv("SHORTRIZZ_RUNS", str(tmp_path))
     seen = {}
     monkeypatch.setattr(H, "_start_job", lambda kind, argv, out: seen.setdefault("argv", argv) and
                         {"job_id": "x", "kind": kind, "pid": 999999, "out_dir": str(out), "log": str(out / "l"),
