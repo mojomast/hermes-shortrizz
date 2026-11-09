@@ -16,7 +16,7 @@ def _edit_flags(p):
                    help="plain render: one continuous range, no deeper edits at all")
     for flag, key, helptext in [("llm-edits", "llm_edits", "second LLM pass for false starts/repeats/fillers"),
                                 ("hook-text", "hook_text", "on-screen hook text in the first 0-3 s"),
-                                ("loudnorm", "loudnorm", "two-pass loudnorm to -14 LUFS / -1 dBTP")]:
+                                ("loudnorm", "loudnorm", "two-pass loudnorm to -14 LUFS / -1.5 dBTP")]:
         g.add_argument(f"--no-{flag}", dest=key, action="store_const", const=False, default=None, help=f"disable {helptext}")
     for flag, key, helptext in [("cold-open", "cold_open", "flash the best line first"),
                                 ("tts-intro", "tts_intro", "Kokoro narrator context line before the clip"),

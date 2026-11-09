@@ -393,7 +393,7 @@ def make_edl(src, words, clip, opts, cache=None, tr_hash="", existing=None):
         v["hook_text"] = " ".join(re.sub(r"[^\w' $%]", "", clip.get("title", "")).split()[:6])
     edl = {"edl_version": EDL_VERSION, "source": {"start": clip["start"], "end": clip["end"]},
            "word_range": [a, b], "gap_policy": PRESETS.get(opts["edit"]), "llm": bool(plan), **v,
-           "audio": {"loudnorm": -14, "true_peak": -1.0}}
+           "audio": {"loudnorm": -14, "true_peak": -1.5}}
     if cf:
         cf.write_text(json.dumps(edl, ensure_ascii=False, indent=1))
     return edl
