@@ -22,7 +22,7 @@ captions in the Hormozi, MrBeast or Abdaal style. You can use it as a CLI or as 
 
 <sub>A sibling of <a href="https://github.com/mojomast/comfyrizz">Comfyrizz</a>. Comfyrizz makes explainers. Shortrizz clips them.</sub>
 
-[Quickstart](#quickstart) · [Features](#features) · [Highlights](#long-form-highlights) · [Hermes plugin](#hermes-plugin) · [Styles](#caption-styles) · [How it works](#how-it-works) · [Limitations](#limitations)
+[Quickstart](#quickstart) · [Features](#features) · [Highlights](#long-form-highlights) · [Hermes plugin](#hermes-plugin) · [Studio](#shortrizz-studio) · [Styles](#caption-styles) · [How it works](#how-it-works) · [Limitations](#limitations)
 
 </div>
 
@@ -154,6 +154,28 @@ hermes plugins doctor shortrizz
 | `shortrizz_publish_plan` | Writes `publish_plan.json` as a dry run for YouTube Shorts, TikTok and Instagram Reels. It never uploads anything. |
 
 **Select, then render.** `shortrizz SOURCE --select-only` (tool `stage: "select"`) writes `<run>/picks.json`, a `picks.vN.json` snapshot, and `stills/<id>.jpg` for each pick, then stops before any encode. Edit the picks (trim `start`/`end`, `title`, `caption_style`, `enabled`, `order`) and render with `shortrizz --picks <run>/picks.json` (tool `stage: "render"`, `picks_path`). Omitting `--out` renders into the picks folder. The default one-shot command still selects and encodes in one run, and also writes `picks.json`. The file format is [docs/PICKS_CONTRACT.md](docs/PICKS_CONTRACT.md). Plugin `out_dir` and `picks_path` must resolve inside `SHORTRIZZ_RUNS`; `cache_dir` must resolve inside `SHORTRIZZ_CACHE`. The CLI `--out` path is not confined, so `shortrizz URL --out ./out` still works.
+
+## Shortrizz Studio
+
+Studio is the Desktop pane for the same select → review → render path. It needs Hermes `>=0.23.0`. Install the plugin, then open **Shortrizz Studio** (a right-hand pane, 960px). After install or an update, Hermes Desktop may need **Capabilities → Plugins → Rescan** before the pane and its routes show up. The Python half stays off until the plugin is in `plugins.enabled`.
+
+The pane talks only to `/api/plugins/shortrizz/`. It does not add tools. The six `shortrizz_*` tools are unchanged.
+
+<img src="docs/images/studio-onboarding.png" alt="Shortrizz Studio empty state: paste a URL, choose shorts or highlights, then select moments" width="880">
+
+Paste a video URL or a local file, choose shorts or highlights, and start a select-only job. Nothing is encoded yet. If `ffmpeg`, `yt-dlp`, or `OPENCODE_GO_API_KEY` is missing, Studio names the dependency and what to do. It never prints a secret value. Without the key, selection uses the heuristic picker.
+
+<img src="docs/images/studio-storyboard.png" alt="Storyboard cards with stills, caption overlay, trim controls, and caption style" width="880">
+
+Each pick is a card: still, score, title, hook, transcript snippet, duration, and start–end. Click the still to build a cached 360p proxy (`previews/<id>_<startMs>_<endMs>.mp4`, no burned captions) and play that segment. A CSS overlay approximates the Hormozi, MrBeast, or Abdaal caption style on the still and on the proxy.
+
+Edit the title, nudge start or end by 0.5 seconds (snapped to `words.json` when that sidecar exists), pick a caption style, turn a card off, or drag to reorder. **Save** writes the next `picks.vN.json`. The version menu restores an older revision without deleting history. **Re-pick** runs selection again with `avoid_previous`. **Render approved** encodes the enabled picks (`stage: render`) and reports progress per clip.
+
+<img src="docs/images/studio-render.png" alt="Finished shorts playing inline, with restyle and open-folder actions" width="880">
+
+Finished MP4s play inline. **Restyle** encodes another caption style into a new render version. **Open folder** reveals the run directory. Earlier renders stay in `renders/vN/`.
+
+Every still, proxy, and MP4 is read through the runs root. Paths that leave that root, including symlink escapes, are rejected.
 
 **Long jobs.** Rendering takes minutes, so each job runs as a detached `python -m shortrizz` process and reports
 progress in `out_dir/progress.json`. A tool call returns right away, or after `wait_seconds` (at most 280 s,

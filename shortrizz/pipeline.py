@@ -228,6 +228,10 @@ def _write_run_picks(out, kind, src, meta, total, clips, words, settings):
     if video and Path(video).is_file():
         picks.write_stills(video, doc["picks"], out)
     picks.save_picks(out, doc, refresh_stills=False)
+    try:
+        picks.write_words(out, words)
+    except OSError as e:
+        log(f"words sidecar skipped ({e})")
     return doc
 
 

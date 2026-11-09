@@ -9,7 +9,7 @@ description: >-
   face-tracked reframe, word-by-word captions, a virality score, a title,
   why-it-hooks and a caption with hashtags. Call the shortrizz_* tools. Jobs
   run in the background; poll shortrizz_status. Publishing is a dry-run plan only.
-version: "0.4.0"
+version: "0.5.0"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -61,7 +61,11 @@ you start.
    removed, cuts, effects and final length.
 5. Optional: `shortrizz_render_style` with `run_dir` (the finished `out_dir`)
    and a new `style` re-renders the same clips without re-transcribing.
-6. Optional: `shortrizz_publish_plan` writes a dry-run schedule to
+6. Optional: the Desktop pane **Shortrizz Studio** (Hermes >= 0.23.0) does the
+   same review without new tools: storyboard, trim, save `picks.vN.json`, then
+   render. If the pane is missing after install, the user rescans from
+   Capabilities → Plugins.
+7. Optional: `shortrizz_publish_plan` writes a dry-run schedule to
    `publish_plan.json`. It never uploads. Live posting to YouTube, TikTok or
    Instagram is not implemented. Do not try to upload the clips with other tools
    unless the user explicitly asks and names the account.

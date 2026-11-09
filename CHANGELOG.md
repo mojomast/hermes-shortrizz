@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-09
+
+### Added
+- **Shortrizz Studio**, a Hermes Desktop pane (`desktop/plugin.js`, Hermes `>=0.23.0`). It lists runs, shows the storyboard before any encode, plays a cached 360p proxy with a CSS caption overlay, and lets you trim (snapped to `words.json`), retitle, restyle, enable, and reorder picks. Save writes `picks.vN.json` with undo/restore. Re-pick reruns selection with `avoid_previous`. Render approved encodes the saved picks and keeps earlier renders. The tool list stays at six; the pane uses `/api/plugins/shortrizz/`.
+
 ## [0.4.0] - 2026-11-09
 
 ### Security

@@ -36,7 +36,8 @@ def test_plugin_yaml_declares_version_tools_and_secret():
     from shortrizz.secrets import DECLARED_SECRETS
     manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text())
     assert manifest["name"] == "shortrizz"
-    assert manifest["version"] == __version__
+    assert manifest["version"] == __version__ == "0.5.0"
+    assert manifest["requires_hermes"] == ">=0.23.0"
     assert manifest["provides_hooks"] == []
     assert manifest["provides_tools"] == list(H.TOOL_NAMES)
     assert len(H.TOOL_NAMES) == 6
