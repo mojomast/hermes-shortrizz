@@ -11,22 +11,28 @@ import os, subprocess
 from pathlib import Path
 import numpy as np
 import cv2
-from .util import log, models_dir
+from .util import ensure_verified, log, models_dir
 
-YUNET_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/"
-             "face_detection_yunet_2023mar.onnx")
+# Pinned opencv_zoo commit (not raw/main). SHA-256 is the ONNX file bytes.
+YUNET_COMMIT = "f12e12798e8314f7c074a6656816c048dcc95b7a"
+YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+YUNET_URL = (
+    "https://github.com/opencv/opencv_zoo/raw/"
+    f"{YUNET_COMMIT}/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
 
 def yunet_model():
-    """Path to the YuNet face model, downloaded once into the models cache. None -> Haar fallback."""
+    """Path to the YuNet face model, downloaded once into the models cache. None -> Haar fallback.
+
+    The download is pinned to ``YUNET_COMMIT`` and rejected unless its SHA-256 matches.
+    """
     p = models_dir() / "face_detection_yunet_2023mar.onnx"
-    if not p.exists() and os.environ.get("SHORTRIZZ_OFFLINE") != "1":
-        try:
-            import urllib.request
-            log("downloading YuNet face model (230 KB)…")
-            urllib.request.urlretrieve(YUNET_URL, p.with_suffix(".part")); p.with_suffix(".part").rename(p)
-        except Exception as e:
-            log(f"YuNet download failed ({e}); using Haar cascade")
-    return p if p.exists() else None
+    try:
+        ok = ensure_verified(p, YUNET_URL, YUNET_SHA256, "YuNet face model")
+    except Exception as e:
+        log(f"YuNet download failed ({e}); using Haar cascade")
+        return None
+    return p if ok and p.exists() else None
 AW = 960  # analysis width (mouth-motion needs enough face pixels)
 
 class Detector:

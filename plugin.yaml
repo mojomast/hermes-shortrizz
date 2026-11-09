@@ -1,10 +1,10 @@
 name: shortrizz
-version: "0.3.0"
+version: "0.4.0"
 description: >-
   Skill id shortrizz:shortrizz-clipper. Shortrizz is a self-hosted AI clipper,
   a sibling of Comfyrizz: give it a long video URL or file and it downloads it,
   transcribes it on CPU with faster-whisper, picks the best 30-60 s moments with
-  an LLM (OpenCode Go key from the Hermes .env, or a built-in heuristic), reframes
+  an LLM (OPENCODE_GO_API_KEY via the Hermes secret scope, or a built-in heuristic), reframes
   16:9 to 9:16 with face tracking, burns in word-by-word captions (Hormozi,
   MrBeast, Abdaal or custom styles), tightens dead air, removes fillers and
   false starts with a validated AI edit pass, adds a hook line, normalises
@@ -33,7 +33,16 @@ provides_tools:
   - shortrizz_render_style
   - shortrizz_publish_plan
 provides_hooks: []
-requires_env: []
+requires_env:
+  - name: OPENCODE_GO_API_KEY
+    description: >-
+      OpenCode Go API key for the LLM clip picker. Hermes loads this plugin
+      only when the key is set. A job that starts without it (the CLI) falls
+      back to the heuristic picker. Shortrizz reads this name through
+      agent.secret_scope when that module imports, and from the environment
+      otherwise. It does not open a dotenv file.
+    url: https://opencode.ai
+    secret: true
 # Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
 # ffmpeg/ffprobe must be on PATH (system package). deno is optional but makes
 # YouTube downloads reliable.

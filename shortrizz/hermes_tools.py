@@ -10,6 +10,8 @@ from __future__ import annotations
 import json, os, re, signal, subprocess, sys, time, uuid
 from pathlib import Path
 
+from .secrets import DECLARED_SECRETS, get_secret
+
 SKILL_ID = "shortrizz:shortrizz-clipper"
 TOOLSET = "shortrizz"
 MAX_WAIT = 280
@@ -30,6 +32,85 @@ def _jobs_dir() -> Path:
 def _runs_dir() -> Path:
     d = Path(os.environ.get("SHORTRIZZ_RUNS", Path.home() / "shortrizz-runs")).expanduser()
     d.mkdir(parents=True, exist_ok=True); return d
+
+
+# Exact names copied into a job. LANG/LC_* and SHORTRIZZ_* are added below.
+# TLS CA paths are not secrets; dropping them breaks HTTPS downloads.
+_CHILD_EXACT = frozenset({
+    "PATH", "HOME", "TMPDIR", "LANG",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+})
+
+
+def runs_root() -> Path:
+    return Path(os.environ.get("SHORTRIZZ_RUNS", Path.home() / "shortrizz-runs")).expanduser().resolve()
+
+
+def cache_root() -> Path:
+    raw = os.environ.get("SHORTRIZZ_CACHE") or str(Path.home() / ".cache" / "shortrizz")
+    return Path(raw).expanduser().resolve()
+
+
+def confine_path(path, root: Path, label: str) -> Path:
+    """Resolve ``path`` and refuse anything outside ``root``, including ``..`` and symlink escapes."""
+    root = Path(root).expanduser().resolve()
+    if not str(path).strip():
+        raise ValueError(f"{label} is empty. Choose a path inside {root}.")
+    resolved = Path(path).expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(
+            f"{label} must stay inside {root}. "
+            f"{path} resolves to {resolved}, which is outside that folder."
+        ) from None
+    return resolved
+
+
+def child_env(pythonpath: str) -> dict:
+    """Environment for a background job. Undeclared provider keys never cross into it."""
+    env = {}
+    for key, value in os.environ.items():
+        if key in _CHILD_EXACT or key.startswith("LC_"):
+            env[key] = value
+        elif key.startswith("SHORTRIZZ_") and not key.endswith("_ENV_FILE"):
+            env[key] = value
+    for name in DECLARED_SECRETS:
+        value = get_secret(name)
+        if value:
+            env[name] = value
+    env["PYTHONPATH"] = pythonpath
+    env["PYTHONUNBUFFERED"] = "1"
+    env.pop("PYTHONHOME", None)
+    return env
+
+
+def _stage_of(a):
+    stage = str(a.get("stage") or "all")
+    if stage not in ("all", "select", "render"):
+        raise ValueError('stage must be "all", "select" or "render"')
+    picks = None
+    if stage == "render":
+        if not str(a.get("picks_path") or "").strip():
+            raise ValueError("picks_path is required when stage is render")
+        picks = confine_path(a["picks_path"], runs_root(), "picks_path")
+        if not picks.is_file():
+            raise ValueError(f"picks file not found: {picks}")
+    elif a.get("picks_path"):
+        raise ValueError("picks_path is only used when stage is render")
+    return stage, picks
+
+
+def _confined_out(a, default: Path) -> Path:
+    if a.get("out_dir"):
+        return confine_path(a["out_dir"], runs_root(), "out_dir")
+    return confine_path(default, runs_root(), "out_dir")
+
+
+def _confined_cache(a):
+    if not a.get("cache_dir"):
+        return None
+    return confine_path(a["cache_dir"], cache_root(), "cache_dir")
 
 
 def _args(params) -> dict:
@@ -102,8 +183,7 @@ def _start_job(kind: str, argv: list[str], out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     log = out_dir / "job.log"
     paths = [str(PKG_ROOT)] + [p for p in sys.path if p and Path(p).is_dir()]
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join(dict.fromkeys(paths)), PYTHONUNBUFFERED="1")
-    env.pop("PYTHONHOME", None)
+    env = child_env(os.pathsep.join(dict.fromkeys(paths)))
     py = _job_python()
     with open(log, "wb") as fh:
         proc = subprocess.Popen([py, "-m", "shortrizz", *argv], stdout=fh, stderr=subprocess.STDOUT,
@@ -134,6 +214,21 @@ def _job_state(job: dict) -> dict:
     state = {"job_id": job["job_id"], "kind": job["kind"], "out_dir": str(out),
              "elapsed_sec": round(time.time() - job["started"], 1), "stage": prog.get("stage", "starting"),
              "progress": {"done": prog.get("done", 0), "total": prog.get("total", 0)}}
+    if prog.get("stage") == "picks_ready" and (out / "picks.json").is_file():
+        try:
+            from shortrizz.picks import load_picks, summaries
+            doc = load_picks(out / "picks.json")
+        except ValueError as e:
+            state.update(status="failed", ok=False, stage="picks_ready", error=str(e),
+                         next_step="Fix picks.json (see docs/PICKS_CONTRACT.md) and call the make tool with stage \"render\".")
+            return state
+        state["stage"] = "picks_ready"
+        state.update(status="done", ok=True, picks_kind=doc.get("kind"), run_id=doc.get("run_id"),
+                     picks_json=str(out / "picks.json"), picks=summaries(doc, out),
+                     next_step=("Picks are ready and nothing has been encoded. Show each pick's title, score, "
+                                "hook, start/end and still. After edits, call the same make tool with "
+                                "stage \"render\" and picks_path set to picks.json."))
+        return state
     if prog.get("stage") == "done" and (out / "clips.json").exists():
         from shortrizz.pipeline import summary
         doc = json.loads((out / "clips.json").read_text())
@@ -169,56 +264,75 @@ def _wait(job: dict, wait: float) -> dict:
 
 
 # ------------------------------------------------------------------ handlers
+def _watermark_argv(a):
+    if a.get("watermark") is True:
+        return ["--watermark"]
+    if a.get("watermark") is False:
+        return ["--no-watermark"]
+    return []
+
+
 def make_shorts_tool(params=None, **_kw) -> str:
     try:
         a = _args(params)
-        source = str(a.get("source") or "").strip()
-        if not source:
-            raise ValueError("source (a video URL or local file path) is required")
-        if not re.match(r"^https?://", source):
-            p = Path(source).expanduser()
-            if not p.is_file():
-                raise ValueError(f"local file not found: {source}")
-            source = str(p.resolve())
-        count = _num(a, "count", 5, 1, 20, int)
-        mn = _num(a, "min_seconds", 30, 5, 180); mx = _num(a, "max_seconds", 60, 5, 180)
-        if mn > mx:
-            raise ValueError("min_seconds must be <= max_seconds")
-        style = _check_style(a.get("style"))
-        reframe = str(a.get("reframe") or "auto")
-        if reframe not in REFRAMES:
-            raise ValueError(f"reframe must be one of {', '.join(REFRAMES)}")
-        model = str(a.get("model") or "small")
-        if model not in ("tiny", "base", "small", "medium", "large-v3", "distil-large-v3"):
-            raise ValueError("model must be tiny, base, small, medium, large-v3 or distil-large-v3")
+        stage, picks = _stage_of(a)
         wait = _num(a, "wait_seconds", 0, 0, MAX_WAIT)
-        out = Path(a["out_dir"]).expanduser() if a.get("out_dir") else None
+        reframe = a.get("reframe")
+        if reframe and reframe not in REFRAMES:
+            raise ValueError(f"reframe must be one of {', '.join(REFRAMES)}")
+        if stage == "render":
+            out = _confined_out(a, picks.parent)
+        else:
+            source = str(a.get("source") or "").strip()
+            if not source:
+                raise ValueError("source (a video URL or local file path) is required")
+            if not re.match(r"^https?://", source):
+                p = Path(source).expanduser()
+                if not p.is_file():
+                    raise ValueError(f"local file not found: {source}")
+                source = str(p.resolve())
+            count = _num(a, "count", 5, 1, 20, int)
+            mn = _num(a, "min_seconds", 30, 5, 180); mx = _num(a, "max_seconds", 60, 5, 180)
+            if mn > mx:
+                raise ValueError("min_seconds must be <= max_seconds")
+            style = _check_style(a.get("style"))
+            reframe = str(reframe or "auto")
+            model = str(a.get("model") or "small")
+            if model not in ("tiny", "base", "small", "medium", "large-v3", "distil-large-v3"):
+                raise ValueError("model must be tiny, base, small, medium, large-v3 or distil-large-v3")
+            cache = _confined_cache(a)
+            out = _confined_out(a, _runs_dir() / f"run-{time.strftime('%Y%m%d-%H%M%S')}")
     except ValueError as e:
         return _err(str(e))
-    argv = [source, "--count", str(count), "--min", f"{mn:g}", "--max", f"{mx:g}", "--style", style,
-            "--reframe", reframe, "--model", model, "--json"]
-    if a.get("use_llm") is False:
-        argv.append("--no-llm")
-    if a.get("watermark") is True:
-        argv.append("--watermark")
-    elif a.get("watermark") is False:
-        argv.append("--no-watermark")
     try:
-        argv += _edit_argv(a)
+        edits = _edit_argv(a)
+    except ValueError as e:
+        return _err(str(e))
+    if stage == "render":
+        argv = ["--picks", str(picks), "--json", "--out", str(out), *edits, *_watermark_argv(a)]
+        if a.get("reframe"):
+            argv += ["--reframe", a["reframe"]]
+        note = "Rendering the enabled picks in order, with each pick's trim, title and caption style."
+    else:
+        argv = [source, "--count", str(count), "--min", f"{mn:g}", "--max", f"{mx:g}", "--style", style,
+                "--reframe", reframe, "--model", model, "--json", *edits, *_watermark_argv(a)]
+        if a.get("use_llm") is False:
+            argv.append("--no-llm")
         if a.get("length") == "tight":
             argv += ["--length", "tight"]
         if a.get("avoid_previous"):
             argv.append("--avoid-previous")
-    except ValueError as e:
-        return _err(str(e))
-    if a.get("cache_dir"):
-        argv += ["--cache", str(Path(a["cache_dir"]).expanduser())]
-    out = (out or _runs_dir() / f"run-{time.strftime('%Y%m%d-%H%M%S')}").resolve()
-    argv += ["--out", str(out)]
-    job = _start_job("make", argv, out)
-    st = _wait(job, wait)
-    st["note"] = ("First run on a new video downloads and transcribes it (about 1/10-1/4 of its length on 8 CPU "
-                  "cores), then renders about 1 min per clip with edits. Cached videos only re-render.")
+        if stage == "select":
+            argv.append("--select-only")
+        if cache is not None:
+            argv += ["--cache", str(cache)]
+        argv += ["--out", str(out)]
+        note = ("Selection only: writes picks.json and a still per pick, then stops before any encode. "
+                "Poll until stage is picks_ready." if stage == "select" else
+                "First run on a new video downloads and transcribes it (about 1/10-1/4 of its length on 8 CPU "
+                "cores), then renders about 1 min per clip with edits. Cached videos only re-render.")
+    st = _wait(_start_job("make", argv, out), wait)
+    st["note"] = note
     return _out(st)
 
 
@@ -291,9 +405,10 @@ def render_style_tool(params=None, **_kw) -> str:
         reframe = a.get("reframe")
         if reframe and reframe not in REFRAMES:
             raise ValueError(f"reframe must be one of {', '.join(REFRAMES)}")
+        default_out = run.resolve().parent / f"{run.name}-{Path(style).stem}"
+        out = _confined_out(a, default_out)
     except ValueError as e:
         return _err(str(e))
-    out = Path(a["out_dir"]).expanduser().resolve() if a.get("out_dir") else run.resolve().parent / f"{run.name}-{Path(style).stem}"
     argv = ["restyle", str(run.resolve()), "--style", style, "--out", str(out)] + (["--reframe", reframe] if reframe else [])
     if a.get("watermark") is True:
         argv.append("--watermark")
@@ -311,65 +426,74 @@ def make_highlights_tool(params=None, **_kw) -> str:
     """One 16:9 highlights reel. Same scoring as shorts; background job, poll shortrizz_status."""
     try:
         a = _args(params)
-        source = str(a.get("source") or "").strip()
-        if not source:
-            raise ValueError("source (a video URL or local file path) is required")
-        if not re.match(r"^https?://", source):
-            p = Path(source).expanduser()
-            if not p.is_file():
-                raise ValueError(f"local file not found: {source}")
-            source = str(p.resolve())
-        duration = _num(a, "duration", 180, 0, 14400)
-        max_clips = _num(a, "max_clips", 8, 0, 40, int)
-        min_score = _num(a, "min_score", 50, 0, 100)
-        mn = _num(a, "min_seconds", 15, 5, 300)
-        mx = _num(a, "max_seconds", 45, 5, 600)
-        if mn > mx:
-            raise ValueError("min_seconds must be <= max_seconds")
-        order = str(a.get("order") or "chrono")
-        if order not in ("chrono", "score"):
-            raise ValueError("order must be chrono or score")
-        fade = _num(a, "crossfade", 0.4, 0, 2)
-        style = str(a.get("style") or "hormozi")
-        if a.get("captions") is not False:
-            style = _check_style(style)
-        model = str(a.get("model") or "small")
-        if model not in ("tiny", "base", "small", "medium", "large-v3", "distil-large-v3"):
-            raise ValueError("model must be tiny, base, small, medium, large-v3 or distil-large-v3")
+        stage, picks = _stage_of(a)
         wait = _num(a, "wait_seconds", 0, 0, MAX_WAIT)
-        out = Path(a["out_dir"]).expanduser() if a.get("out_dir") else None
+        if stage == "render":
+            out = _confined_out(a, picks.parent)
+        else:
+            source = str(a.get("source") or "").strip()
+            if not source:
+                raise ValueError("source (a video URL or local file path) is required")
+            if not re.match(r"^https?://", source):
+                p = Path(source).expanduser()
+                if not p.is_file():
+                    raise ValueError(f"local file not found: {source}")
+                source = str(p.resolve())
+            duration = _num(a, "duration", 180, 0, 14400)
+            max_clips = _num(a, "max_clips", 8, 0, 40, int)
+            min_score = _num(a, "min_score", 50, 0, 100)
+            mn = _num(a, "min_seconds", 15, 5, 300)
+            mx = _num(a, "max_seconds", 45, 5, 600)
+            if mn > mx:
+                raise ValueError("min_seconds must be <= max_seconds")
+            order = str(a.get("order") or "chrono")
+            if order not in ("chrono", "score"):
+                raise ValueError("order must be chrono or score")
+            fade = _num(a, "crossfade", 0.4, 0, 2)
+            style = str(a.get("style") or "hormozi")
+            if a.get("captions") is not False:
+                style = _check_style(style)
+            model = str(a.get("model") or "small")
+            if model not in ("tiny", "base", "small", "medium", "large-v3", "distil-large-v3"):
+                raise ValueError("model must be tiny, base, small, medium, large-v3 or distil-large-v3")
+            cache = _confined_cache(a)
+            out = _confined_out(a, _runs_dir() / f"highlights-{time.strftime('%Y%m%d-%H%M%S')}")
     except ValueError as e:
         return _err(str(e))
-    argv = ["highlights", source, "--duration", f"{duration:g}", "--max-clips", str(max_clips),
-            "--min-score", f"{min_score:g}", "--min", f"{mn:g}", "--max", f"{mx:g}",
-            "--order", order, "--crossfade", f"{fade:g}", "--style", style, "--model", model, "--json"]
-    if a.get("hard_cuts"):
-        argv.append("--hard-cuts")
-    if a.get("captions") is False:
-        argv.append("--no-captions")
-    if a.get("loudnorm") is False:
-        argv.append("--no-loudnorm")
-    if a.get("chapters") is False:
-        argv.append("--no-chapters")
-    if a.get("manifest") is False:
-        argv.append("--no-manifest")
-    if a.get("use_llm") is False:
-        argv.append("--no-llm")
-    if a.get("avoid_previous"):
-        argv.append("--avoid-previous")
-    if a.get("watermark") is True:
-        argv.append("--watermark")
-    elif a.get("watermark") is False:
-        argv.append("--no-watermark")
-    if a.get("cache_dir"):
-        argv += ["--cache", str(Path(a["cache_dir"]).expanduser())]
-    out = (out or _runs_dir() / f"highlights-{time.strftime('%Y%m%d-%H%M%S')}").resolve()
-    argv += ["--out", str(out)]
-    job = _start_job("highlights", argv, out)
-    st = _wait(job, wait)
-    st["note"] = ("Highlights uses the same download, transcript and virality scores as shorts, then joins the "
-                  "top segments into one 16:9 file. The first run transcribes the source; rendering is one "
-                  "encode per segment plus the join.")
+    if stage == "render":
+        argv = ["highlights", "--picks", str(picks), "--json", "--out", str(out), *_watermark_argv(a)]
+        note = "Rendering the enabled highlight picks in order, with each pick's trim, title and caption style."
+    else:
+        argv = ["highlights", source, "--duration", f"{duration:g}", "--max-clips", str(max_clips),
+                "--min-score", f"{min_score:g}", "--min", f"{mn:g}", "--max", f"{mx:g}",
+                "--order", order, "--crossfade", f"{fade:g}", "--style", style, "--model", model, "--json",
+                *_watermark_argv(a)]
+        if a.get("hard_cuts"):
+            argv.append("--hard-cuts")
+        if a.get("captions") is False:
+            argv.append("--no-captions")
+        if a.get("loudnorm") is False:
+            argv.append("--no-loudnorm")
+        if a.get("chapters") is False:
+            argv.append("--no-chapters")
+        if a.get("manifest") is False:
+            argv.append("--no-manifest")
+        if a.get("use_llm") is False:
+            argv.append("--no-llm")
+        if a.get("avoid_previous"):
+            argv.append("--avoid-previous")
+        if stage == "select":
+            argv.append("--select-only")
+        if cache is not None:
+            argv += ["--cache", str(cache)]
+        argv += ["--out", str(out)]
+        note = ("Selection only: writes picks.json and a still per pick, then stops before any encode. "
+                "Poll until stage is picks_ready." if stage == "select" else
+                "Highlights uses the same download, transcript and virality scores as shorts, then joins the "
+                "top segments into one 16:9 file. The first run transcribes the source; rendering is one "
+                "encode per segment plus the join.")
+    st = _wait(_start_job("highlights", argv, out), wait)
+    st["note"] = note
     return _out(st)
 
 
@@ -406,13 +530,46 @@ _WAIT = {"type": "integer", "minimum": 0, "maximum": MAX_WAIT,
          "description": f"Block up to this many seconds for the job to finish (0-{MAX_WAIT}). Default 0."}
 
 
+def _brief_edits():
+    """Same edit knobs as make_shorts, with short descriptions so the schema is not copied twice."""
+    short = {
+        "edit": "Dead-air preset.",
+        "deeper_edits": "false = plain render.",
+        "llm_edits": "LLM filler pass.",
+        "hook_text": "On-screen hook.",
+        "loudnorm": "Normalise to -14 LUFS.",
+        "cold_open": "Opt-in cold open.",
+        "tts_intro": "Opt-in narrator intro.",
+        "tts_outro": "Opt-in narrator outro.",
+        "zoom": "Opt-in punch-in.",
+        "loop": "Opt-in loop ending.",
+        "emoji": "Opt-in emoji.",
+        "sfx": "Opt-in pop/whoosh.",
+    }
+    out = {}
+    for key, spec in _EDIT_PARAMS.items():
+        item = {"type": spec["type"], "description": short[key]}
+        if "enum" in spec:
+            item["enum"] = spec["enum"]
+        out[key] = item
+    return out
+
+
+_STAGE = {"type": "string", "enum": ["all", "select", "render"],
+          "description": "all (default) selects and renders. select writes picks.json and stills, no encode. render encodes picks_path."}
+_PICKS = {"type": "string", "description": "picks.json to encode when stage is render. Enabled picks, in order."}
+_OUT = {"type": "string", "description": "Output folder inside ~/shortrizz-runs (or $SHORTRIZZ_RUNS)."}
+_CACHE = {"type": "string", "description": "Cache inside ~/.cache/shortrizz (or $SHORTRIZZ_CACHE)."}
+
+
 def tool_specs() -> list[dict]:
     style = {"type": "string", "description": "hormozi | mrbeast | abdaal, or a path to a custom style .json"}
     specs = [
         ("shortrizz_make_shorts", make_shorts_tool, "🎬",
          "Turn a long video (YouTube/any yt-dlp URL or a local file) into captioned 9:16 shorts: transcribe, "
-         "pick the best moments with an LLM, face-track reframe, burn word-by-word captions. Starts a "
-         "background job and returns job_id; poll shortrizz_status. Only for content the user has rights to.",
+         "pick the best moments with an LLM, face-track reframe, burn word-by-word captions. "
+         "stage=select stops after picks.json and stills; stage=render encodes picks_path. "
+         "Starts a background job and returns job_id; poll shortrizz_status. Only for content the user has rights to.",
          {"source": {"type": "string", "description": "Video URL or local file path."},
           "count": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Clips to make. Default 5."},
           "min_seconds": {"type": "number", "description": "Shortest clip. Default 30."},
@@ -421,9 +578,10 @@ def tool_specs() -> list[dict]:
           "reframe": {"type": "string", "enum": list(REFRAMES), "description": "Default auto (face tracking)."},
           "model": {"type": "string", "description": "faster-whisper size. Default small."},
           "use_llm": {"type": "boolean", "description": "false = heuristic picks only. Default true."},
-          "out_dir": {"type": "string", "description": "Output folder. Default ~/shortrizz-runs/run-<time>."},
+          "stage": _STAGE, "picks_path": _PICKS,
+          "out_dir": _OUT,
           "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo watermark. Omit to use the user's setting (off by default)."},
-          "cache_dir": {"type": "string", "description": "Download/transcript cache. Default ~/.cache/shortrizz."},
+          "cache_dir": _CACHE,
           "length": {"type": "string", "enum": ["default", "tight"], "description": "tight = 20-35 s clips."},
           "avoid_previous": {"type": "boolean", "description": "Skip moments earlier runs on this video already used."},
           **_EDIT_PARAMS, "wait_seconds": _WAIT}, ["source"]),
@@ -431,8 +589,8 @@ def tool_specs() -> list[dict]:
          "Build ONE 16:9 highlights video from the highest-scoring moments of a long video (same transcript "
          "and virality scores as shorts, no vertical crop). Target duration, max segment count and minimum "
          "score; chronological order by default. Short audio and video crossfade, optional lower-third "
-         "captions. Starts a background job and returns job_id; poll shortrizz_status. Only for content "
-         "the user has rights to.",
+         "captions. stage=select stops after picks.json and stills; stage=render encodes picks_path. "
+         "Starts a background job and returns job_id; poll shortrizz_status. Only for content the user has rights to.",
          {"source": {"type": "string", "description": "Video URL or local file path."},
           "duration": {"type": "number", "description": "Target total length in seconds. Default 180. 0 = no duration cap."},
           "max_clips": {"type": "integer", "minimum": 0, "maximum": 40, "description": "Max segments. Default 8. 0 = no count cap."},
@@ -450,13 +608,14 @@ def tool_specs() -> list[dict]:
           "model": {"type": "string", "description": "faster-whisper size. Default small."},
           "use_llm": {"type": "boolean", "description": "false = heuristic picks only. Default true."},
           "avoid_previous": {"type": "boolean", "description": "Skip moments earlier runs on this video already used."},
-          "out_dir": {"type": "string", "description": "Output folder. Default ~/shortrizz-runs/highlights-<time>."},
+          "stage": _STAGE, "picks_path": _PICKS,
+          "out_dir": _OUT,
           "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo. Omit to use the user's setting (off by default)."},
-          "cache_dir": {"type": "string", "description": "Download/transcript cache. Default ~/.cache/shortrizz."},
+          "cache_dir": _CACHE,
           "wait_seconds": _WAIT}, ["source"]),
         ("shortrizz_status", status_tool, "⏳",
-         "Progress or result of a Shortrizz job. When done, returns each short (path, title, score, "
-         "duration) or, for a highlights job, the 16:9 file and its segments.",
+         "Progress or result of a Shortrizz job. When done, returns each short or the highlights file. "
+         "stage picks_ready means picks.json and stills are ready and nothing has been encoded.",
          {"job_id": {"type": "string"}, "wait_seconds": _WAIT,
           "cancel": {"type": "boolean", "description": "Stop the job."}}, ["job_id"]),
         ("shortrizz_list_styles", list_styles_tool, "🎨", "List caption style presets and reframe modes.", {}, []),
@@ -466,7 +625,7 @@ def tool_specs() -> list[dict]:
          {"run_dir": {"type": "string", "description": "Folder of a finished run (has clips.json)."},
           "style": style, "reframe": {"type": "string", "enum": list(REFRAMES)},
           "watermark": {"type": "boolean", "description": "Burn in the small Shortrizz logo watermark. Omit to use the user's setting (off by default)."},
-          **_EDIT_PARAMS, "out_dir": {"type": "string"}, "wait_seconds": _WAIT}, ["run_dir", "style"]),
+          **_brief_edits(), "out_dir": _OUT, "wait_seconds": _WAIT}, ["run_dir", "style"]),
         ("shortrizz_publish_plan", publish_plan_tool, "🗓️",
          "Dry run: write publish_plan.json scheduling a run's clips to YouTube Shorts / TikTok / Instagram "
          "Reels. Never uploads.",

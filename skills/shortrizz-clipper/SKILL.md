@@ -9,13 +9,14 @@ description: >-
   face-tracked reframe, word-by-word captions, a virality score, a title,
   why-it-hooks and a caption with hashtags. Call the shortrizz_* tools. Jobs
   run in the background; poll shortrizz_status. Publishing is a dry-run plan only.
-version: "0.3.0"
+version: "0.4.0"
 author: mojomast
 license: MIT
 compatibility: >-
   Python 3.10+, ffmpeg and ffprobe on PATH. CPU only. deno on PATH makes
-  YouTube downloads reliable. The LLM picker reads OPENCODE_GO_API_KEY from the
-  Hermes .env; without it a heuristic picks clips.
+  YouTube downloads reliable. The LLM picker reads OPENCODE_GO_API_KEY through
+  the Hermes secret scope (the same name in the environment for the CLI).
+  Shortrizz does not open a dotenv file. Without the key a heuristic picks clips.
 metadata:
   hermes:
     tags: [video, shorts, clipping, captions, whisper]
@@ -78,6 +79,17 @@ segment's title, score and source time. `chapters.txt` and `highlights.json`
 sit next to the video. This path does not reframe to 9:16 and does not run the
 shorts edit effects. Do not offer `shortrizz_publish_plan` for a highlights run.
 
+## Preview picks before encoding
+To let the user look at moments before any encode, call `shortrizz_make_shorts`
+or `shortrizz_make_highlights` with `stage: "select"`. Poll `shortrizz_status`
+until `stage` is `picks_ready`. Show each pick's title, score, hook, start, end
+and still path. The user can edit `<out_dir>/picks.json` (trim, title,
+`caption_style`, `enabled`, `order`). Each save keeps `picks.vN.json`. Then call
+the same tool with `stage: "render"` and `picks_path` set to that `picks.json`.
+`stage` defaults to `all`, which still selects and renders in one job.
+`out_dir`, `cache_dir` and `picks_path` must stay inside the plugin's runs and
+cache folders. See `docs/PICKS_CONTRACT.md`.
+
 ## Rules
 - Do not run the CLI in a terminal when the tools are available. Do not try to
   install CUDA or GPU packages, because Shortrizz is CPU only.
@@ -85,4 +97,4 @@ shorts edit effects. Do not offer `shortrizz_publish_plan` for a highlights run.
   age-gated video, or a file with no audio track. Tell the user the cause and
   do not keep retrying the same input.
 - `cancel: true` on `shortrizz_status` stops a job.
-- Never print or ask for the API key. It is read from the Hermes `.env`.
+- Never print or ask for the API key. It is `OPENCODE_GO_API_KEY`, read through the Hermes secret scope.

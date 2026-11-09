@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+### Security
+- The plugin no longer reads a Hermes dotenv file. `OPENCODE_GO_API_KEY` is declared in `plugin.yaml` `requires_env` and looked up with `agent.secret_scope.get_secret` when that module imports, otherwise from the environment for that name only.
+- Background jobs get an allowlisted environment (PATH, HOME, LANG/LC_*, TMPDIR, PYTHONPATH, declared secrets, `SHORTRIZZ_*` config, and TLS CA paths). Other provider keys are not copied.
+- Plugin `out_dir` and `picks_path` must resolve under `SHORTRIZZ_RUNS` (default `~/shortrizz-runs`). `cache_dir` must resolve under `SHORTRIZZ_CACHE` (default `~/.cache/shortrizz`). The CLI `--out` path stays unrestricted.
+- The YuNet face model is downloaded from a pinned opencv_zoo commit and checked with SHA-256. Kokoro model files are checked with SHA-256. `kokoro-onnx` is bounded to `>=0.4,<1`.
+
+### Added
+- Select → picks → render. `picks.json` (schema in `docs/PICKS_CONTRACT.md`) plus a still JPEG per pick. `picks.vN.json` keeps each revision. CLI `--select-only` and `--picks`. The two make tools take `stage` (`all` | `select` | `render`) and `picks_path`. `shortrizz_status` reports `stage: picks_ready`. The default one-shot command still selects and encodes.
+
 ## [0.3.0] - 2026-11-05
 
 ### Added

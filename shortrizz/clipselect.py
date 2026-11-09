@@ -5,13 +5,13 @@ non-overlapping subset that fits a target duration.
 """
 import difflib, json, os, re, uuid
 from pathlib import Path
-from .util import log, load_env_file
+from .secrets import get_secret, DECLARED_SECRETS
+from .util import log
 from .transcribe import all_words
 
 BASE_URL = os.environ.get("SHORTRIZZ_LLM_BASE_URL", "https://opencode.ai/zen/go/v1")
 MODEL = os.environ.get("SHORTRIZZ_LLM_MODEL", "deepseek-v4.1-flash")
-ENV_FILE = os.environ.get("SHORTRIZZ_ENV_FILE", os.path.join(os.environ.get("HERMES_HOME", "~/.hermes"), ".env"))
-KEY_VAR = "OPENCODE_GO_API_KEY"
+KEY_VAR = DECLARED_SECRETS[0]
 END_PUNCT = (".", "?", "!")
 
 # ---------------------------------------------------------------- boundaries
@@ -90,10 +90,9 @@ Transcript:
 
 def llm_chat(messages, max_tokens=16000, timeout=300, extra=None):
     import requests
-    load_env_file(ENV_FILE)
-    key = os.environ.get(KEY_VAR)
+    key = get_secret(KEY_VAR)
     if not key:
-        raise RuntimeError(f"{KEY_VAR} not set (looked in {ENV_FILE})")
+        raise RuntimeError(f"{KEY_VAR} is not set")
     r = requests.post(f"{BASE_URL}/chat/completions", timeout=timeout,
                       headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                                "x-opencode-session": f"shortrizz-{uuid.uuid4().hex[:12]}"},

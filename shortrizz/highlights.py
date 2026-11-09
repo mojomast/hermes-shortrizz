@@ -262,20 +262,31 @@ def render_highlights(src, segments, out_path, words=None, style=None, crossfade
     planned = [max(0.3, float(s["end"]) - float(s["start"])) for s in segments]
     fade0 = _usable_fade(planned, crossfade)
     work = Path(tempfile.mkdtemp(prefix="shortrizz-hl-"))
+    loaded_styles = {}
+
+    def raw_style(seg):
+        name = seg.get("caption_style")
+        if not name:
+            return style
+        if name not in loaded_styles:
+            loaded_styles[name] = captions.load_style(name)
+        return loaded_styles[name]
+
     try:
         parts = []
         for i, seg in enumerate(segments):
             if progress:
                 progress("render", i, len(segments))
             dur = planned[i]
+            use_style = raw_style(seg)
             ass = None
-            if style is not None and words is not None and seg.get("word_range"):
+            if use_style is not None and words is not None and seg.get("word_range"):
                 a, b = seg["word_range"]
                 shown = caption_window(local_words(words, a, b, float(seg["start"])), dur, fade0,
                                         fade_in=i > 0 and fade0 > 0, fade_out=i < len(segments) - 1 and fade0 > 0)
                 if shown:
                     ass = work / f"seg-{i:02d}.ass"
-                    look = captions.for_landscape(style, w, h)
+                    look = captions.for_landscape(use_style, w, h)
                     ass.write_text(captions.build_ass(shown, 0.0, dur, look, W=w, H=h))
                     if keep_ass:
                         shutil.copy(ass, out_path.parent / ass.name)

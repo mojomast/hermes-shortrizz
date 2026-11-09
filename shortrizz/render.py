@@ -44,6 +44,14 @@ def thumbnail(mp4, out_jpg, t=1.0):
     run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t}", "-i", str(mp4), "-frames:v", "1", "-vf", "scale=360:-2",
          "-q:v", "3", str(out_jpg)])
 
+
+def still_frame(src, t, out_jpg, width=360):
+    """Small JPEG of the source at ``t`` seconds. ``-ss`` is placed before ``-i``."""
+    out_jpg = Path(out_jpg)
+    out_jpg.parent.mkdir(parents=True, exist_ok=True)
+    run(["ffmpeg", "-v", "error", "-y", "-ss", f"{max(0.0, float(t)):.3f}", "-i", str(src),
+         "-frames:v", "1", "-vf", f"scale={int(width)}:-2", "-q:v", "5", str(out_jpg)])
+
 # ---------------------------------------------------------------- deeper edits renderer
 def _frames_exact(gen, n, fallback):
     last = fallback

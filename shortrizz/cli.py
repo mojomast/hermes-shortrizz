@@ -28,6 +28,13 @@ def _edit_flags(p):
         g.add_argument(f"--{flag}", dest=key, action="store_const", const=True, default=None, help=f"opt-in: {helptext}")
     g.add_argument("--all-fx", action="store_true", help="turn every opt-in effect on")
 
+def _picks_flags(p):
+    p.add_argument("--select-only", action="store_true",
+                   help="write picks.json and a still per pick, then stop before any encode")
+    p.add_argument("--picks", metavar="PATH",
+                   help="render this picks.json (enabled picks, in order) instead of selecting")
+
+
 def _edits(a):
     keys = ["edit", "enabled", "llm_edits", "hook_text", "loudnorm", "cold_open", "tts_intro", "tts_outro", "zoom",
             "loop", "emoji", "sfx"]
@@ -65,7 +72,7 @@ def main(argv=None):
         _highlights(argv[1:]); return
     p = argparse.ArgumentParser(prog="shortrizz", description="Turn a long video into captioned vertical shorts.",
                                 epilog="Other commands: shortrizz highlights SOURCE | shortrizz restyle RUN_DIR --style S | shortrizz publish DIR | shortrizz styles")
-    p.add_argument("source", help="YouTube/any yt-dlp URL, or a local video file")
+    p.add_argument("source", nargs="?", help="YouTube/any yt-dlp URL, or a local video file")
     p.add_argument("--count", type=int, default=5)
     p.add_argument("--min", type=float, default=30, help="min clip length (s)")
     p.add_argument("--max", type=float, default=60, help="max clip length (s)")
@@ -76,7 +83,7 @@ def main(argv=None):
     p.add_argument("--length", choices=["default", "tight"], default="default",
                    help="tight = 20-35 s clips (overrides --min/--max)")
     p.add_argument("--style", default="hormozi", help="hormozi | mrbeast | abdaal | path/to/style.json")
-    p.add_argument("--out", default="./shortrizz-out")
+    p.add_argument("--out", default=None, help="output folder (default ./shortrizz-out, or the picks folder with --picks)")
     p.add_argument("--cache", default=pipeline.DEFAULT_CACHE)
     p.add_argument("--model", default="small", help="faster-whisper model (tiny/base/small/medium/large-v3)")
     p.add_argument("--language", default=None)
@@ -88,14 +95,25 @@ def main(argv=None):
     p.add_argument("--every-hours", type=float, default=24)
     p.add_argument("--keep-ass", action="store_true")
     p.add_argument("--json", action="store_true", help="print a JSON summary on stdout when done")
-    _wm_flags(p); _edit_flags(p)
+    _picks_flags(p); _wm_flags(p); _edit_flags(p)
     a = p.parse_args(argv)
+    if a.picks and a.select_only:
+        p.error("--select-only and --picks cannot be used together")
     if a.length == "tight":
         a.min, a.max = 20.0, 35.0
-    doc = pipeline.make(a.source, a.out, a.count, a.min, a.max, a.style, a.cache, a.model, a.language, a.reframe,
-                        not a.no_llm, a.fresh, a.preset, a.schedule.split(",") if a.schedule else None,
-                        a.every_hours, a.keep_ass, watermark=a.watermark,
-                        edits=_edits(a), exclude=a.exclude, avoid_previous=a.avoid_previous)
+    if a.picks:
+        doc = pipeline.render_from_picks(
+            a.picks, a.out, preset=a.preset, watermark=a.watermark, edits=_edits(a), keep_ass=a.keep_ass,
+            reframe=a.reframe, schedule=a.schedule.split(",") if a.schedule else None, every_hours=a.every_hours,
+            expect_kind="shorts")
+    else:
+        if not a.source:
+            p.error("source is required unless --picks is set")
+        doc = pipeline.make(a.source, a.out or "./shortrizz-out", a.count, a.min, a.max, a.style, a.cache, a.model,
+                            a.language, a.reframe, not a.no_llm, a.fresh, a.preset,
+                            a.schedule.split(",") if a.schedule else None, a.every_hours, a.keep_ass,
+                            watermark=a.watermark, edits=_edits(a), exclude=a.exclude, avoid_previous=a.avoid_previous,
+                            select_only=a.select_only)
     if a.json:
         print(json.dumps(pipeline.summary(doc), indent=2))
 
@@ -103,7 +121,7 @@ def _highlights(argv):
     p = argparse.ArgumentParser(
         prog="shortrizz highlights",
         description="Build one 16:9 highlights video from the highest-scoring moments of a source.")
-    p.add_argument("source", help="YouTube/any yt-dlp URL, or a local video file")
+    p.add_argument("source", nargs="?", help="YouTube/any yt-dlp URL, or a local video file")
     p.add_argument("--duration", type=float, default=180, help="target total length in seconds (0 = no duration cap)")
     p.add_argument("--max-clips", type=int, default=8, help="max segments (0 = no count cap)")
     p.add_argument("--min-score", type=float, default=50, help="drop segments scored below this (0-100)")
@@ -115,7 +133,7 @@ def _highlights(argv):
     p.add_argument("--hard-cuts", action="store_true", help="butt-join segments with no crossfade")
     p.add_argument("--no-captions", action="store_true", help="leave captions off (default is on, lower third)")
     p.add_argument("--style", default="hormozi", help="hormozi | mrbeast | abdaal | path/to/style.json")
-    p.add_argument("--out", default="./shortrizz-out")
+    p.add_argument("--out", default=None, help="output folder (default ./shortrizz-out, or the picks folder with --picks)")
     p.add_argument("--cache", default=pipeline.DEFAULT_CACHE)
     p.add_argument("--model", default="small", help="faster-whisper model (tiny/base/small/medium/large-v3)")
     p.add_argument("--language", default=None)
@@ -132,21 +150,31 @@ def _highlights(argv):
                    help="skip moments picked by earlier runs on the same video (from the cache)")
     p.add_argument("--keep-ass", action="store_true")
     p.add_argument("--json", action="store_true", help="print a JSON summary on stdout when done")
+    _picks_flags(p)
     _wm_flags(p)
     a = p.parse_args(argv)
+    if a.picks and a.select_only:
+        p.error("--select-only and --picks cannot be used together")
     if a.min > a.max:
         p.error("--min must be <= --max")
     if not 0 <= a.crossfade <= 2:
         p.error("--crossfade must be between 0 and 2")
     if not 0 <= a.min_score <= 100:
         p.error("--min-score must be between 0 and 100")
-    doc = pipeline.highlights(
-        a.source, a.out, target=a.duration, max_clips=a.max_clips, min_score=a.min_score,
-        min_len=a.min, max_len=a.max, order=a.order, crossfade=0.0 if a.hard_cuts else a.crossfade,
-        captions=not a.no_captions, style=a.style, cache=a.cache, model=a.model, language=a.language,
-        use_llm=not a.no_llm, fresh=a.fresh, preset=a.preset, watermark=a.watermark,
-        loudnorm=not a.no_loudnorm, chapters=not a.no_chapters, manifest=not a.no_manifest,
-        max_width=a.max_width, exclude=a.exclude, avoid_previous=a.avoid_previous, keep_ass=a.keep_ass)
+    if a.picks:
+        doc = pipeline.render_from_picks(a.picks, a.out, preset=a.preset, watermark=a.watermark,
+                                         keep_ass=a.keep_ass, expect_kind="highlights")
+    else:
+        if not a.source:
+            p.error("source is required unless --picks is set")
+        doc = pipeline.highlights(
+            a.source, a.out or "./shortrizz-out", target=a.duration, max_clips=a.max_clips, min_score=a.min_score,
+            min_len=a.min, max_len=a.max, order=a.order, crossfade=0.0 if a.hard_cuts else a.crossfade,
+            captions=not a.no_captions, style=a.style, cache=a.cache, model=a.model, language=a.language,
+            use_llm=not a.no_llm, fresh=a.fresh, preset=a.preset, watermark=a.watermark,
+            loudnorm=not a.no_loudnorm, chapters=not a.no_chapters, manifest=not a.no_manifest,
+            max_width=a.max_width, exclude=a.exclude, avoid_previous=a.avoid_previous, keep_ass=a.keep_ass,
+            select_only=a.select_only)
     if a.json:
         print(json.dumps(pipeline.summary(doc), indent=2))
 
