@@ -9,7 +9,7 @@ description: >-
   face-tracked reframe, word-by-word captions, a virality score, a title,
   why-it-hooks and a caption with hashtags. Call the shortrizz_* tools. Jobs
   run in the background; poll shortrizz_status. Publishing is a dry-run plan only.
-version: "0.5.0"
+version: "0.5.1"
 author: mojomast
 license: MIT
 compatibility: >-
