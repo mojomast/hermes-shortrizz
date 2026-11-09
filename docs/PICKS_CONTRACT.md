@@ -9,6 +9,8 @@ A Desktop preview pane edits this file before any encode. `shortrizz` (shorts) a
 | `<run>/picks.json` | Current revision. Overwritten on every save. |
 | `<run>/picks.vN.json` | Immutable snapshot. `N` starts at 1 and increases only when the document content changes. |
 | `<run>/stills/<id>.jpg` | One small JPEG per pick, grabbed with ffmpeg `-ss` before `-i` at the midpoint of `start`/`end`, scaled to 360 px wide. |
+| `<run>/words.json` | Optional sidecar (not part of schema version 1): `[{"w","s","e"}, …]` for the whole source. Studio snaps trims to these boundaries. Missing means numeric trims are kept as typed. |
+| `<run>/previews/<id>_<startMs>_<endMs>.mp4` | Optional 360p proxy Studio builds on demand for hover preview. Not an encode of the short. |
 
 `revision` on the document is the snapshot number. Comparing revisions ignores that field: an unchanged document does not allocate a new `N`. Editing `picks.json` in place and saving again (including a render) writes the next snapshot, so the pane can show history and undo by loading an older `picks.vN.json` and saving it as the new head.
 

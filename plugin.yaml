@@ -1,5 +1,5 @@
 name: shortrizz
-version: "0.4.0"
+version: "0.5.0"
 description: >-
   Skill id shortrizz:shortrizz-clipper. Shortrizz is a self-hosted AI clipper,
   a sibling of Comfyrizz: give it a long video URL or file and it downloads it,
@@ -16,6 +16,7 @@ description: >-
   is a dry-run plan only; nothing is uploaded. Only clip content you have rights to.
 author: mojomast
 license: MIT
+requires_hermes: ">=0.23.0"
 homepage: https://github.com/mojomast/hermes-shortrizz
 tags:
   - video

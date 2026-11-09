@@ -136,6 +136,21 @@ def _refresh_changed_stills(run_dir, prev, doc):
         write_stills(src, changed, run_dir)
 
 
+def write_words(run_dir, words):
+    """Sidecar of word timestamps so Studio can snap trims. Not part of the picks schema."""
+    rows = []
+    for w in words or []:
+        if not isinstance(w, dict):
+            continue
+        try:
+            rows.append({"w": str(w["w"]), "s": round(float(w["s"]), 3), "e": round(float(w["e"]), 3)})
+        except (KeyError, TypeError, ValueError):
+            continue
+    path = Path(run_dir) / "words.json"
+    path.write_text(json.dumps(rows, ensure_ascii=False))
+    return path
+
+
 def save_picks(run_dir, doc, *, refresh_stills=True):
     """Write ``picks.json`` and, when the content changed, ``picks.vN.json``.
 
