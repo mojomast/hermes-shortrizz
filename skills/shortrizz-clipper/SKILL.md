@@ -9,7 +9,7 @@ description: >-
   face-tracked reframe, word-by-word captions, a virality score, a title,
   why-it-hooks and a caption with hashtags. Call the shortrizz_* tools. Jobs
   run in the background; poll shortrizz_status. Publishing is a dry-run plan only.
-version: "0.5.1"
+version: "0.6.0"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -56,9 +56,14 @@ you start.
    `llm_edits`, `hook_text`, `loudnorm`, and the opt-in effects `cold_open`,
    `tts_intro`, `tts_outro` (AI narrator, stock voice; tell the user it is a
    synthetic voice), `zoom`, `loop`, `emoji`, `sfx`. `length: "tight"` gives
-   20-35 s clips. `watermark` burns in the Shortrizz mark (off unless the user's
+   20-35 s clips.    `watermark` burns in the Shortrizz mark (off unless the user's
    config turns it on). Each clip in the result reports its edits: seconds
    removed, cuts, effects and final length.
+   Every short and every highlights file opens on a money shot: frame 0 is the
+   strongest finished frame, with the hook or caption already readable, so the
+   file works as the thumbnail. Audio is not shifted. It is on unless the user
+   set `SHORTRIZZ_MONEY_SHOT=0` (also `false`, `off`, `no`) or `"money_shot": false`
+   in the Shortrizz config. There is no tool parameter for it.
 5. Optional: `shortrizz_render_style` with `run_dir` (the finished `out_dir`)
    and a new `style` re-renders the same clips without re-transcribing.
 6. Optional: the Desktop pane **Shortrizz Studio** (Hermes >= 0.23.0) does the
@@ -77,7 +82,8 @@ call `shortrizz_make_highlights` with `source`. Useful knobs: `duration`
 `min_seconds`/`max_seconds` (default 15/45), `order` (`chrono` by default so
 the story stays in order, or `score`), `crossfade` (default 0.4; `hard_cuts`
 for butt joins), `captions` (default on, lower third; the same `style` names),
-`loudnorm` (default on). It returns a `job_id`. Poll `shortrizz_status` the
+`loudnorm` (default on). The reel opens on the same money shot as a short.
+It returns a `job_id`. Poll `shortrizz_status` the
 same way. When it finishes, report the highlights file, the duration, and each
 segment's title, score and source time. `chapters.txt` and `highlights.json`
 sit next to the video. This path does not reframe to 9:16 and does not run the

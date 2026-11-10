@@ -7,7 +7,7 @@ then joined with a short audio and video crossfade, or a hard cut.
 import shutil, subprocess, tempfile
 from pathlib import Path
 from .util import log, ffprobe_duration
-from . import captions, render
+from . import captions, money, render
 
 
 def fit_16x9(sw, sh, max_width=1920):
@@ -141,21 +141,39 @@ def _has_audio(src):
     return bool((r.stdout or "").strip())
 
 
-def _encode_segment(src, start, dur, path, w, h, fps, ass_path, loudnorm, preset, crf):
-    vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
-          f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps:g},setsar=1,format=yuv420p")
-    if ass_path:
-        vf += f",ass='{_esc(ass_path)}'"
+def _encode_segment(src, start, dur, path, w, h, fps, ass_path, loudnorm, preset, crf, hero=None):
+    """``hero`` is ``{"png", "hold"}``. The still covers the first ``hold`` seconds. Audio is the source span."""
+    base_vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+               f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps:g},setsar=1,format=yuv420p")
+    hold = float(hero["hold"]) if hero and hero.get("png") else 0.0
+    use_hero = hold > 0.01 and Path(hero["png"]).is_file()
     base = "aformat=sample_rates=48000:channel_layouts=stereo"
 
+    def video_tail(body):
+        if ass_path:
+            return body + f",ass='{_esc(ass_path)}'"
+        return body
+
     def cmd(af):
-        return ["ffmpeg", "-hide_banner", "-v", "error", "-y",
-                "-ss", f"{max(0.0, start):.3f}", "-t", f"{dur:.3f}", "-i", str(src),
-                "-map", "0:v:0", "-map", "0:a:0", "-vf", vf, "-af", af,
-                "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-                "-profile:v", "high", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
-                "-movflags", "+faststart", str(path)]
+        head = ["ffmpeg", "-hide_banner", "-v", "error", "-y",
+                "-ss", f"{max(0.0, start):.3f}", "-t", f"{dur:.3f}", "-i", str(src)]
+        if not use_hero:
+            return head + ["-map", "0:v:0", "-map", "0:a:0", "-vf", video_tail(base_vf), "-af", af,
+                           "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+                           "-profile:v", "high", "-pix_fmt", "yuv420p",
+                           "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                           "-movflags", "+faststart", str(path)]
+        # The still is looped for the whole segment and shown only while t < hold, so the
+        # output clock stays the segment length. eof_action=pass keeps the real picture after it.
+        head += ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{dur:.3f}", "-i", str(hero["png"])]
+        shown = video_tail(
+            f"[base][hero]overlay=eof_action=pass:shortest=1:enable='lt(t\\,{hold:.3f})'")
+        fc = (f"[0:v]{base_vf}[base];[1:v]scale={w}:{h}:flags=lanczos,setsar=1,format=rgba[hero];{shown}[vout]")
+        return head + ["-filter_complex", fc, "-map", "[vout]", "-map", "0:a:0", "-af", af,
+                       "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+                       "-profile:v", "high", "-pix_fmt", "yuv420p",
+                       "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                       "-movflags", "+faststart", str(path)]
 
     if loudnorm:
         try:
@@ -238,7 +256,8 @@ def _timeline(durations, fade):
 
 
 def render_highlights(src, segments, out_path, words=None, style=None, crossfade=0.4, loudnorm=True,
-                      preset="medium", crf=20, max_width=1920, watermark=None, keep_ass=False, progress=None):
+                      preset="medium", crf=20, max_width=1920, watermark=None, keep_ass=False, progress=None,
+                      money_shot=None):
     """Render `segments` (in play order) to one 16:9 MP4. Returns geometry, duration and per-segment times.
 
     `style` is a caption style dict; None leaves captions off. `watermark` is a settings() dict.
@@ -262,6 +281,9 @@ def render_highlights(src, segments, out_path, words=None, style=None, crossfade
     planned = [max(0.3, float(s["end"]) - float(s["start"])) for s in segments]
     fade0 = _usable_fade(planned, crossfade)
     work = Path(tempfile.mkdtemp(prefix="shortrizz-hl-"))
+    show_money = money.enabled(money_shot)
+    hero_plan = money.describe(None, on=False)
+    hero_png = None
     loaded_styles = {}
 
     def raw_style(seg):
@@ -273,6 +295,17 @@ def render_highlights(src, segments, out_path, words=None, style=None, crossfade
         return loaded_styles[name]
 
     try:
+        if show_money:
+            ranges = money.ranges_from_segments(segments)
+            hero_plan_full = money.choose(src, ranges, sw, sh, fps)
+            hero_plan = money.describe(hero_plan_full, on=True)
+            if hero_plan_full.get("hold_frames") and hero_plan_full.get("t") is not None:
+                still = money.fitted_still(src, hero_plan_full["t"], sw, sh, w, h)
+                if still is not None:
+                    hero_png = work / "hero.png"
+                    money.write_png(still, hero_png)
+                else:
+                    hero_plan = {**hero_plan, "reason": "no-frame", "hold_sec": 0.0}
         parts = []
         for i, seg in enumerate(segments):
             if progress:
@@ -287,12 +320,14 @@ def render_highlights(src, segments, out_path, words=None, style=None, crossfade
                 if shown:
                     ass = work / f"seg-{i:02d}.ass"
                     look = captions.for_landscape(use_style, w, h)
-                    ass.write_text(captions.build_ass(shown, 0.0, dur, look, W=w, H=h))
+                    ass.write_text(captions.build_ass(
+                        shown, 0.0, dur, look, W=w, H=h, money_shot=show_money and i == 0))
                     if keep_ass:
                         shutil.copy(ass, out_path.parent / ass.name)
             part = work / f"seg-{i:02d}.mp4"
             log(f"  segment {i + 1}/{len(segments)}  {seg['start']:.1f}-{seg['end']:.1f}s -> {w}x{h}@{fps:g}")
-            _encode_segment(src, float(seg["start"]), dur, part, w, h, fps, ass, loudnorm, preset, crf)
+            hero = {"png": hero_png, "hold": hero_plan.get("hold_sec") or 0} if i == 0 and hero_png else None
+            _encode_segment(src, float(seg["start"]), dur, part, w, h, fps, ass, loudnorm, preset, crf, hero=hero)
             parts.append(part)
         durs = [ffprobe_duration(p) for p in parts]
         fade_used, last_err = fade0, None
@@ -323,4 +358,5 @@ def render_highlights(src, segments, out_path, words=None, style=None, crossfade
     duration = round(ffprobe_duration(out_path), 3)
     log(f"  highlights {w}x{h} {duration:.1f}s  fade {fade_used:.2f}s  {lufs:.1f} LUFS")
     return {"width": w, "height": h, "fps": fps, "duration": duration, "planned_duration": planned_total,
-            "crossfade": fade_used, "audio_lufs": lufs, "watermark": bool(wm), "segments": timeline}
+            "crossfade": fade_used, "audio_lufs": lufs, "watermark": bool(wm), "segments": timeline,
+            "money_shot": hero_plan}

@@ -2,7 +2,7 @@ import json, subprocess
 import numpy as np
 from pathlib import Path
 from .util import run, log
-from . import reframe
+from . import money, reframe
 
 def probe(src):
     out = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
@@ -11,12 +11,41 @@ def probe(src):
     n, d = s["r_frame_rate"].split("/")
     return s["width"], s["height"], float(n) / float(d)
 
-def render_clip(src, start, end, ass_path, out_path, reframe_mode="auto", crf=20, preset="medium", watermark=None):
+def _money_ranges(items, clip, start, end):
+    meta = money.meta_from_clip(clip)
+    ranges = money.ranges_from_items(items, meta) if items else []
+    if ranges:
+        return ranges
+    if end > start:
+        return [{"start": float(start), "end": float(end), **meta}]
+    return []
+
+
+def _money_open(src, start, end, sw, sh, fps, analysis, items, clip, money_shot, out_w=1080, out_h=1920):
+    """``(hero_frame or None, json summary)``. The hero replaces the first hold frames. Audio is untouched."""
+    if not money.enabled(money_shot):
+        return None, money.describe(None, on=False)
+    ranges = _money_ranges(items, clip, start, end)
+    plan = money.choose(src, ranges, sw, sh, fps)
+    frame = None
+    if plan.get("hold_frames") and plan.get("t") is not None:
+        frame = money.output_frame(src, plan["t"], sw, sh, fps, analysis, start, out_w, out_h)
+        if frame is None:
+            plan = {**plan, "hold_frames": 0, "hold_sec": 0.0, "reason": "no-frame"}
+    summary = money.describe(plan, on=True)
+    summary["hold_frames"] = int(plan.get("hold_frames") or 0) if frame is not None else 0
+    return frame, summary
+
+
+def render_clip(src, start, end, ass_path, out_path, reframe_mode="auto", crf=20, preset="medium", watermark=None,
+                money_shot=None, clip=None):
     sw, sh, fps = probe(src)
     fps = min(fps, 60.0)
     dur = end - start
     plan = reframe.make_plan(src, start, dur, sw, sh, reframe_mode)
     ass = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+    hero, shot = _money_open(src, start, end, sw, sh, fps, plan, None, clip, money_shot)
+    hold_n = int(shot.get("hold_frames") or 0)
     enc = subprocess.Popen([
         "ffmpeg", "-v", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", "1080x1920", "-r", f"{fps}", "-i", "-",
@@ -31,14 +60,19 @@ def render_clip(src, start, end, ass_path, out_path, reframe_mode="auto", crf=20
         from .watermark import Overlay
         wm = Overlay(1080, 1920, watermark)
     for fr in reframe.render_frames(src, start, dur, sw, sh, fps, analysis=plan):
+        if hero is not None and n < hold_n:
+            fr = np.array(hero, copy=True)
         if wm is not None:
             fr = wm.apply(np.array(fr))
-        enc.stdin.write(fr.tobytes()); n += 1
+        enc.stdin.write(np.ascontiguousarray(fr).tobytes()); n += 1
     enc.stdin.close()
     if enc.wait() != 0:
         raise RuntimeError(f"ffmpeg encode failed for {out_path}")
     audio = check_audio(out_path)
-    return {"audio_lufs": audio, "frames": n, "watermark": wm is not None, "reframe": "letterbox" if plan is None else ("center" if len(plan[0]) == 1 else "face")}
+    shot.pop("hold_frames", None)
+    return {"audio_lufs": audio, "frames": n, "watermark": wm is not None,
+            "reframe": "letterbox" if plan is None else ("center" if len(plan[0]) == 1 else "face"),
+            "money_shot": shot}
 
 def thumbnail(mp4, out_jpg, t=1.0):
     run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t}", "-i", str(mp4), "-frames:v", "1", "-vf", "scale=360:-2",
@@ -314,11 +348,13 @@ def pick_holds(ctx, items):
                 it["at"], it["frame"] = b
 
 def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, reframe_mode="auto", crf=20,
-                preset="medium", watermark=None, loudnorm=True, ctx=None):
+                preset="medium", watermark=None, loudnorm=True, ctx=None, money_shot=None, clip=None):
     """One encode: Python-reframed frames for every kept segment (+ holds), one audio graph with
     crossfades/SFX, two-pass loudnorm, ASS captions/hook text burned in."""
     ctx = ctx or prepare(src, clip_start, clip_end, reframe_mode)
     sw, sh, fps, plan = ctx["sw"], ctx["sh"], ctx["fps"], ctx["plan"]
+    hero, shot = _money_open(src, clip_start, clip_end, sw, sh, fps, plan, items, clip, money_shot)
+    hold_n = int(shot.get("hold_frames") or 0)
     base = max(0.0, min(it.get("s", clip_start) for it in items) - 1.0)
     span = max(it.get("e", clip_end) for it in items) - base + 1.0
     # one demuxed copy of the source span per kept segment: an asplit feeding acrossfade goes silent
@@ -373,6 +409,8 @@ def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, refram
             frames = (it["frame"] for _ in range(n))
         for fr in frames:
             t = nfr / fps
+            if hero is not None and nfr < hold_n:
+                fr = np.array(hero, copy=True)
             fr = apply_zoom(np.ascontiguousarray(fr), zoom_at(t, fx))
             last = fr
             if emo is not None:
@@ -384,5 +422,7 @@ def render_edit(src, clip_start, clip_end, items, ass_path, out_path, fx, refram
     if enc.wait() != 0:
         raise RuntimeError(f"ffmpeg encode failed for {out_path}")
     audio = check_audio(out_path)
+    shot.pop("hold_frames", None)
     return {"audio_lufs": audio, "frames": nfr, "duration": round(nfr / fps, 2), "watermark": wm is not None,
-            "reframe": "letterbox" if plan is None else ("center" if len(plan[0]) == 1 else "face")}
+            "reframe": "letterbox" if plan is None else ("center" if len(plan[0]) == 1 else "face"),
+            "money_shot": shot}

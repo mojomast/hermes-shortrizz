@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
+### Added
+- **Money shot, on by default.** Shorts and highlights open on the strongest frame in the cut, so frame 0 works as the thumbnail on TikTok, Shorts, Reels, X, and Discord. The frame is scored for sharpness, brightness, face visibility, and steadiness, with a bonus at the hook and for the segment's virality score. `hero: true` on a segment outranks the others. `hero_time` (source seconds) pins the frame. A hero within 1.15 s of the in-point is held until the clock reaches it. A later hero is a 0.28 s picture-only cold open. Audio is not moved and the file stays the same length. The opening caption and hook are fully opaque at frame 0 (no fade-in). The gallery still is frame 0.
+- Turn it off with `--no-money-shot`, `SHORTRIZZ_MONEY_SHOT=0` (`false`, `off`, and `no` too), or `"money_shot": false` in the user config. The same order as the other switches: CLI, then env, then config.
+
 ## [0.5.1] - 2026-11-09
 
 ### Changed

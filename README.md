@@ -14,7 +14,7 @@ Paste a URL or a local file. Shortrizz transcribes it on CPU, picks moments, and
 It is a CLI and a Hermes plugin (`shortrizz`), with a Desktop pane for review before any encode.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
-[![Version 0.5.1](https://img.shields.io/badge/version-0.5.1-8b5cf6)](plugin.yaml)
+[![Version 0.6.0](https://img.shields.io/badge/version-0.6.0-8b5cf6)](plugin.yaml)
 [![Hermes >=0.23.0](https://img.shields.io/badge/Hermes-%3E%3D0.23.0-111827)](plugin.yaml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Tests](https://img.shields.io/badge/tests-pytest%20%2B%20node-0ea5e9)](#development)
@@ -55,6 +55,8 @@ docs/images/studio-render.png. Caption motion that does exist: docs/media/previe
 <br clear="right">
 
 The default shorts pass also tightens dead air, drops validated fillers and restarts, draws a short hook line, loudness-normalises to −14 LUFS, and keeps text inside platform safe zones. Those edits are on unless you turn them off. A second set of effects (cold open, narrator, zoom, loop, emoji, sound effects) stays off until you ask.
+
+Every short and every highlights reel opens on a money shot. Frame 0 is the strongest finished frame in the cut, with the hook or the first caption already readable, so the file works as the thumbnail and preview. See [Money shot](#money-shot).
 
 ## Quickstart
 
@@ -107,6 +109,7 @@ Names only. Shortrizz does not open a dotenv file. Set secrets in the Hermes sec
 | `SHORTRIZZ_OFFLINE` | `1` skips fetching a missing pinned model file. |
 | `SHORTRIZZ_CONFIG` | User config file. Default `~/.config/shortrizz/config.json`. Never part of the repo. |
 | `SHORTRIZZ_WATERMARK` | `1` or `0`. See [Watermark](#watermark). |
+| `SHORTRIZZ_MONEY_SHOT` | `0`, `false`, `off`, or `no` turns the opening hero frame off. `1`, `true`, `on`, or `yes` forces it on. Unset keeps the default (on). See [Money shot](#money-shot). |
 | `SHORTRIZZ_WATERMARK_<KEY>` | Position, opacity, width, text. |
 | `SHORTRIZZ_KOKORO_DIR` | Kokoro weights. Default `~/.cache/shortrizz/kokoro`. |
 | `SHORTRIZZ_TTS_VOICE` | Stock Kokoro voice. Default `am_michael`. It does not clone the speaker. |
@@ -186,7 +189,7 @@ Edit flags on `shortrizz_make_shorts` and `shortrizz_render_style` (highlights d
 
 ### Bundled skill
 
-`skills/shortrizz-clipper/SKILL.md` is registered as skill name `shortrizz-clipper`. The id inside the file is **`shortrizz:shortrizz-clipper`** (version 0.5.1). The agent loads it with `skill_view("shortrizz:shortrizz-clipper")`. The skill tells the agent to call the tools, poll `shortrizz_status`, refuse uploads, and send the user to Studio when they want to review picks first. It says not to shell out to the CLI when the tools are available.
+`skills/shortrizz-clipper/SKILL.md` is registered as skill name `shortrizz-clipper`. The id inside the file is **`shortrizz:shortrizz-clipper`** (version 0.6.0). The agent loads it with `skill_view("shortrizz:shortrizz-clipper")`. The skill tells the agent to call the tools, poll `shortrizz_status`, refuse uploads, and send the user to Studio when they want to review picks first. It says not to shell out to the CLI when the tools are available. The six tool schemas are unchanged: the money shot has no tool parameter.
 
 ## Pipeline
 
@@ -237,6 +240,8 @@ Opt-in, default off (`--all-fx` turns them all on; each is also a config key and
 
 The intro, outro, and cold open are paid for by trimming the body at a sentence end or a pause, so the file is not longer than the source range or the length band. If the body would get too short, the outro, then the intro, then the cold open are dropped first. Sources above 30 fps are rendered at 30 fps by the edit renderer. Each clip is written to `NAME.partial.mp4` and renamed when the encode finishes. The output must contain an audio stream that is not silent.
 
+**Money shot.** After the picture is planned, Shortrizz samples the kept spans at 4 fps and scores each frame: Laplacian sharpness, brightness (near-black and clipped whites lose), motion against the previous sample (a smear or a cut loses), a Haar face when this OpenCV build has the cascade (a blink loses the face bonus), a small bump at the hook time (`word_start`, or `hero_time` when that is set), and the segment's virality score. `hero: true` on a segment outranks every other segment. `hero_time` pins one source timestamp and outranks the segment flag. An exact tie keeps the earlier frame. When that frame is within 1.15 s of the opening in-point, those leading frames are replaced with it until the clock arrives. When it is later, or in a later highlight segment, the first 0.28 s is that still. No frames are inserted. The audio graph is the one the edit list or the highlight join already built. The first caption page starts at 0 with no fade-in, and an opening hook uses `\fad(0,180)` so the line is opaque on frame 0. The `.jpg` still next to the file is frame 0. `clips.json` records `money_shot` (`enabled`, `reason`, `t`, `hold_sec`, `score`).
+
 `--avoid-previous` skips ranges recorded for that video in the cache. `--exclude RUN_DIR` (or a `clips.json`) skips one earlier run. Both exist on the CLI. The tools expose `avoid_previous`.
 
 **Highlights** reuse the same download, transcript, scores, and sentence snap, then keep non-overlapping segments. Adding a segment may pass `--duration` by up to `max(4 s, 12% of the target)` because a segment is never chopped. Each crossfade shortens the joined file by the fade length (`joined_duration` subtracts one fade per join). The picture is fitted into 16:9, never cropped to vertical, never upscaled, width capped at `--max-width` (default 1920). Captions, when on, sit in the lower third. Per-segment loudnorm uses the same −14 LUFS / −1.5 dBTP filter. The folder contains `highlights.mp4`, `highlights.jpg`, `chapters.txt`, `highlights.json`, `clips.json`, and `index.html`. `shortrizz restyle` and `shortrizz publish` are for a shorts folder.
@@ -268,13 +273,14 @@ shortrizz [SOURCE] [--count 5] [--min 30] [--max 60] [--style hormozi|mrbeast|ab
           [--select-only | --picks picks.json] [--json] [--watermark | --no-watermark]
           [--edit off|light|normal|aggressive] [--no-edits] [--no-llm-edits] [--no-hook-text]
           [--no-loudnorm] [--cold-open] [--tts-intro] [--tts-outro] [--zoom] [--loop]
-          [--emoji] [--sfx] [--all-fx]
+          [--emoji] [--sfx] [--all-fx] [--money-shot | --no-money-shot]
 shortrizz highlights [SOURCE] [--duration 180] [--max-clips 8] [--min-score 50]
           [--min 15] [--max 45] [--order chrono|score] [--crossfade 0.4 | --hard-cuts]
           [--style hormozi] [--no-captions] [--max-width 1920] [--no-loudnorm]
           [--no-chapters] [--no-manifest] [--out DIR] [--no-llm] [--fresh]
-          [--select-only | --picks picks.json] [--json]
-shortrizz restyle RUN_DIR --style STYLE [--out DIR] [--reframe MODE] [--watermark | --no-watermark]
+          [--select-only | --picks picks.json] [--money-shot | --no-money-shot] [--json]
+shortrizz restyle RUN_DIR --style STYLE [--out DIR] [--reframe MODE]
+          [--watermark | --no-watermark] [--money-shot | --no-money-shot]
 shortrizz publish RUN_DIR [--platforms youtube,tiktok,instagram] [--every-hours 24]
 shortrizz styles
 ```
@@ -294,6 +300,22 @@ Studio renders land in `renders/vN/` under the run, with a small `studio.json` m
 <details><summary>Contact sheet from the bundled preview frames</summary>
 <img src="docs/media/contact-sheet.jpg" alt="Frames sampled from three preview clips" width="720">
 </details>
+
+## Money shot
+
+On unless you turn it off. Frame 0 of a short and of a highlights reel is a finished frame: sharp, lit, steady, with a face when the cascade finds one, and with the caption or hook readable. Players that preview the first frame (TikTok, Shorts, Reels, X, Discord) get that picture.
+
+The first value that is set wins:
+
+1. `--money-shot` / `--no-money-shot`. Omit both to keep the user's setting. The Hermes tools do not grow a parameter for this; a job inherits `SHORTRIZZ_MONEY_SHOT` because `SHORTRIZZ_*` is on the child-process allowlist.
+2. `SHORTRIZZ_MONEY_SHOT`. `0`, `false`, `off`, or `no` disables it. `1`, `true`, `on`, or `yes` forces it on.
+3. `~/.config/shortrizz/config.json`, or `$SHORTRIZZ_CONFIG`, key `money_shot` (`true` or `false`).
+
+```json
+{"money_shot": false}
+```
+
+A pick may set `hero: true` to make that segment the thumbnail shot, or `hero_time` (seconds on the source) to pin the frame. Both are optional. Missing means the scorer chooses. See [docs/PICKS_CONTRACT.md](docs/PICKS_CONTRACT.md).
 
 ## Watermark
 
@@ -332,7 +354,7 @@ This is what the code does, and what `tests/test_security.py` locks in.
 - On a tight close-up there may be no face-free caption spot inside the safe zones. Captions then sit on the forehead or hair rather than the mouth.
 - The edit renderer walks frames in Python.
 - Live posting is not implemented. `shortrizz/publish.py` documents the YouTube Data API, TikTok Content Posting API, and Instagram Graph API hooks. `upload()` raises.
-- Highlights do not reframe to 9:16, tighten dead air inside a segment, or apply hook text, cold open, zoom, emoji, or the narrator.
+- Highlights keep the source framing. They do not tighten dead air inside a segment, and they do not apply the shorts hook line, the `--cold-open` line flash, zoom, emoji, or the narrator. They do open on the money-shot frame, with the lower-third caption readable at frame 0 when captions are on.
 - A highlights file can run past `--duration` by the slack above. Each crossfade shortens the total by the fade length.
 - `shortrizz restyle` and `shortrizz publish` do not apply to a highlights folder. Studio restyle refuses one too.
 
@@ -385,7 +407,7 @@ The mark is a 9:16 phone with a play button, cut by one diagonal: a clip taken o
 
 ## Changelog and license
 
-History of 0.1.0 through 0.5.1 is in [CHANGELOG.md](CHANGELOG.md). Version 0.5.1 is the README for 0.5.0, with the Studio screenshots, and the true-peak text corrected to −1.5 dBTP. Version 0.5.0 adds Shortrizz Studio. Version 0.4.0 is the secret-scope, path-confinement, and picks-file release. Version 0.3.0 is highlights.
+History of 0.1.0 through 0.6.0 is in [CHANGELOG.md](CHANGELOG.md). Version 0.6.0 opens every short and every highlights reel on a money shot. Version 0.5.1 is the README for 0.5.0, with the Studio screenshots, and the true-peak text corrected to −1.5 dBTP. Version 0.5.0 adds Shortrizz Studio. Version 0.4.0 is the secret-scope, path-confinement, and picks-file release. Version 0.3.0 is highlights.
 
 Code is [MIT](LICENSE), © 2026 Kyle Durepos ([mojomast](https://github.com/mojomast)).
 

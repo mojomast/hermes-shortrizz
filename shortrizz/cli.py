@@ -28,6 +28,14 @@ def _edit_flags(p):
         g.add_argument(f"--{flag}", dest=key, action="store_const", const=True, default=None, help=f"opt-in: {helptext}")
     g.add_argument("--all-fx", action="store_true", help="turn every opt-in effect on")
 
+def _money_flags(p):
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--money-shot", dest="money_shot", action="store_const", const=True, default=None,
+                   help="open on the strongest frame so frame 0 is the thumbnail (default on)")
+    g.add_argument("--no-money-shot", dest="money_shot", action="store_const", const=False,
+                   help="open on the natural first frame (or set SHORTRIZZ_MONEY_SHOT=0 / config money_shot)")
+
+
 def _picks_flags(p):
     p.add_argument("--select-only", action="store_true",
                    help="write picks.json and a still per pick, then stop before any encode")
@@ -61,9 +69,10 @@ def main(argv=None):
         p = argparse.ArgumentParser(prog="shortrizz restyle", description="Re-render a run with another style.")
         p.add_argument("run_dir"); p.add_argument("--style", required=True); p.add_argument("--out")
         p.add_argument("--reframe", choices=["auto", "face", "center", "letterbox"])
-        _wm_flags(p); _edit_flags(p)
+        _wm_flags(p); _edit_flags(p); _money_flags(p)
         a = p.parse_args(argv[1:])
-        doc = pipeline.restyle(a.run_dir, a.style, a.out, a.reframe, watermark=a.watermark, edits=_edits(a))
+        doc = pipeline.restyle(a.run_dir, a.style, a.out, a.reframe, watermark=a.watermark, edits=_edits(a),
+                               money_shot=a.money_shot)
         print(json.dumps(pipeline.summary(doc), indent=2))
         return
     if argv and argv[0] == "styles":
@@ -95,7 +104,7 @@ def main(argv=None):
     p.add_argument("--every-hours", type=float, default=24)
     p.add_argument("--keep-ass", action="store_true")
     p.add_argument("--json", action="store_true", help="print a JSON summary on stdout when done")
-    _picks_flags(p); _wm_flags(p); _edit_flags(p)
+    _picks_flags(p); _wm_flags(p); _edit_flags(p); _money_flags(p)
     a = p.parse_args(argv)
     if a.picks and a.select_only:
         p.error("--select-only and --picks cannot be used together")
@@ -105,7 +114,7 @@ def main(argv=None):
         doc = pipeline.render_from_picks(
             a.picks, a.out, preset=a.preset, watermark=a.watermark, edits=_edits(a), keep_ass=a.keep_ass,
             reframe=a.reframe, schedule=a.schedule.split(",") if a.schedule else None, every_hours=a.every_hours,
-            expect_kind="shorts")
+            expect_kind="shorts", money_shot=a.money_shot)
     else:
         if not a.source:
             p.error("source is required unless --picks is set")
@@ -113,7 +122,7 @@ def main(argv=None):
                             a.language, a.reframe, not a.no_llm, a.fresh, a.preset,
                             a.schedule.split(",") if a.schedule else None, a.every_hours, a.keep_ass,
                             watermark=a.watermark, edits=_edits(a), exclude=a.exclude, avoid_previous=a.avoid_previous,
-                            select_only=a.select_only)
+                            select_only=a.select_only, money_shot=a.money_shot)
     if a.json:
         print(json.dumps(pipeline.summary(doc), indent=2))
 
@@ -152,6 +161,7 @@ def _highlights(argv):
     p.add_argument("--json", action="store_true", help="print a JSON summary on stdout when done")
     _picks_flags(p)
     _wm_flags(p)
+    _money_flags(p)
     a = p.parse_args(argv)
     if a.picks and a.select_only:
         p.error("--select-only and --picks cannot be used together")
@@ -163,7 +173,7 @@ def _highlights(argv):
         p.error("--min-score must be between 0 and 100")
     if a.picks:
         doc = pipeline.render_from_picks(a.picks, a.out, preset=a.preset, watermark=a.watermark,
-                                         keep_ass=a.keep_ass, expect_kind="highlights")
+                                         keep_ass=a.keep_ass, expect_kind="highlights", money_shot=a.money_shot)
     else:
         if not a.source:
             p.error("source is required unless --picks is set")
@@ -174,7 +184,7 @@ def _highlights(argv):
             use_llm=not a.no_llm, fresh=a.fresh, preset=a.preset, watermark=a.watermark,
             loudnorm=not a.no_loudnorm, chapters=not a.no_chapters, manifest=not a.no_manifest,
             max_width=a.max_width, exclude=a.exclude, avoid_previous=a.avoid_previous, keep_ass=a.keep_ass,
-            select_only=a.select_only)
+            select_only=a.select_only, money_shot=a.money_shot)
     if a.json:
         print(json.dumps(pipeline.summary(doc), indent=2))
 

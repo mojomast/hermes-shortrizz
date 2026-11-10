@@ -3,6 +3,6 @@
   "label": "Shortrizz Studio",
   "description": "Preview picks, edit the storyboard, and render captioned shorts before anything is encoded.",
   "icon": "Clapperboard",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "api": "plugin_api.py"
 }

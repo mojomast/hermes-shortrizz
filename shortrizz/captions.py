@@ -97,15 +97,20 @@ def hook_size(txt, W=1080):
     per_line = max(len(txt) / 2, max(len(x) for x in txt.split())) if len(txt) > 13 else len(txt)
     return int(max(72, min(132, (W - 120 - 192 - 40) / max(1, per_line * 0.58)))), (2 if len(txt) > 13 else 1)
 
-def overlay_events(overlays, W=1080, H=1920):
-    """Hook text (first 0-3 s, top safe zone, below the watermark) and an end CTA, as ASS events."""
+def overlay_events(overlays, W=1080, H=1920, money_shot=False):
+    """Hook text (first 0-3 s, top safe zone, below the watermark) and an end CTA, as ASS events.
+
+    A money shot draws the opening hook fully opaque on frame 0. The fade-out at the
+    end of the line stays. End cards keep the usual fade.
+    """
     ev = []
     for o in overlays or []:
         txt = clean(o["text"], True)
         size, _ = hook_size(txt, W)
         y = int(H * 0.21) if o.get("pos", "top") == "top" else int(H * 0.50)
         y = o.get("y", max(y, SAFE_TOP + 110))  # face-aware hook position from the pipeline
-        fade = "\\fad(120,180)"
+        opening = money_shot and float(o.get("t0") or 0) <= 0.05 and o.get("pos", "top") != "middle"
+        fade = "\\fad(0,180)" if opening else "\\fad(120,180)"
         ev.append(f"Dialogue: 1,{ts(o['t0'])},{ts(o['t1'])},Hook,,120,192,0,,{{\\an8\\pos({(W + 120 - 192) // 2},{y}){fade}\\fs{size}}}{txt}")
     return ev
 
@@ -119,7 +124,7 @@ def merge_number_tokens(ws):
             out.append(w)
     return out
 
-def build_ass(words, clip_start, clip_end, style, W=1080, H=1920, overlays=None, y_at=None):
+def build_ass(words, clip_start, clip_end, style, W=1080, H=1920, overlays=None, y_at=None, money_shot=False):
     st = style
     hdr = f"""[Script Info]
 ScriptType: v4.00+
@@ -138,6 +143,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     x, y = W // 2, min(int(H * st["pos_y"]), int(SAFE_BOTTOM_Y - st["size"] * 0.6))  # stay above platform UI
     ev = []
+    opened = False  # money shot: the first caption page is already on screen at frame 0
     ws = merge_number_tokens([w for w in words if w["e"] > clip_start and w["s"] < clip_end])
     cyc = st.get("highlight_cycle") or [st["highlight"]]
     y_default = y
@@ -173,12 +179,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             chars = sum(len(clean(ww["w"], st["upper"])) + 1 for ww in pg)
             fit = min(1.0, (W - 140) / max(1, chars * st.get("char_w", 0.42) * st["size"] * st["pop"] / 100))
             fs = f"\\fs{int(st['size'] * fit)}" if fit < 1 else ""
-            intro = "\\fad(40,0)" if k == 0 else ""
+            if money_shot and not opened:
+                s = 0.0  # the hook line is readable on the thumbnail, not faded in after the pad
+            intro = "" if (money_shot and s <= 0.001) else ("\\fad(40,0)" if k == 0 else "")
             e = max(e, s + 0.05)
             for c0, c1 in cards:
                 if s < c1 and e > c0:
                     e = c0 if s < c0 else s
             if e - s < 0.05:
                 continue
+            opened = True
             ev.append(f"Dialogue: 0,{ts(s)},{ts(e)},Cap,,0,0,0,,{{\\an5\\pos({x},{y}){fs}{intro}}}{txt}")
-    return hdr + "\n".join(ev + overlay_events(overlays, W, H)) + "\n"
+    return hdr + "\n".join(ev + overlay_events(overlays, W, H, money_shot=money_shot)) + "\n"
