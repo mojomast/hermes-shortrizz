@@ -22,8 +22,16 @@ class Progress:
         self.path.write_text(json.dumps({"stage": stage, "done": done, "total": total,
                                          "elapsed_sec": round(time.time() - self.t0, 1), **extra}))
 
+def _thumb_at(info, fallback):
+    """Frame 0 is the thumbnail when the money shot is on. Otherwise the old mid-clip still."""
+    if (info.get("money_shot") or {}).get("enabled"):
+        return 0.0
+    return fallback
+
+
 def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset="medium", keep_ass=False,
-                 progress=None, watermark=None, edit_opts=None, cache=None, tr_hash="", prev_edls=None):
+                 progress=None, watermark=None, edit_opts=None, cache=None, tr_hash="", prev_edls=None,
+                 money_shot=None):
     loaded = {}
 
     def look(name):
@@ -32,6 +40,8 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
         return loaded[name]
 
     look(style_name)  # fail fast on a bad default style
+    from . import money
+    show_money = money.enabled(money_shot)
     results = []
     for i, c in enumerate(clips, 1):
         style_used = c.get("caption_style") or style_name
@@ -64,18 +74,19 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
                 edit_report["emoji"] = [e for (t0, e) in fx["emoji"] if fx["emoji_places"].get(t0)]
             moved = sum(1 for t, _ in track if y_at(t, t) != base_y)
             edit_report["caption_moves"] = moved
-            ass.write_text(captions.build_ass(cw, 0.0, total, style, overlays=ovl, y_at=y_at))
+            ass.write_text(captions.build_ass(cw, 0.0, total, style, overlays=ovl, y_at=y_at, money_shot=show_money))
             info = render.render_edit(src, c["start"], c["end"], items, ass, mp4, fx, reframe_mode, preset=preset,
-                                      watermark=watermark, loudnorm=edit_opts["loudnorm"], ctx=ctx)
+                                      watermark=watermark, loudnorm=edit_opts["loudnorm"], ctx=ctx,
+                                      money_shot=show_money, clip=c)
             log(f"  edits: -{edit_report['removed_sec']}s, {edit_report['cuts']} cuts, final {edit_report['final_sec']}s")
             for f in out.glob(f"{name}.*.wav"):
                 f.unlink()
         else:
-            ass.write_text(captions.build_ass(words, c["start"], c["end"], style))
+            ass.write_text(captions.build_ass(words, c["start"], c["end"], style, money_shot=show_money))
             info = render.render_clip(src, c["start"], c["end"], ass, mp4, reframe_mode, preset=preset,
-                                      watermark=watermark)
+                                      watermark=watermark, money_shot=show_money, clip=c)
         mp4.replace(final_mp4); mp4 = final_mp4
-        render.thumbnail(mp4, out / f"{name}.jpg", min(1.5, (c["end"] - c["start"]) / 2))
+        render.thumbnail(mp4, out / f"{name}.jpg", _thumb_at(info, min(1.5, (c["end"] - c["start"]) / 2)))
         if not keep_ass:
             ass.unlink()
         a_, b_ = c["word_range"]
@@ -83,6 +94,7 @@ def render_clips(src, words, clips, out, style_name, reframe_mode="auto", preset
         results.append({**c, "file": mp4.name, "thumb": f"{name}.jpg", "duration": edit_report["final_sec"] if edit_report else round(c["end"] - c["start"], 2),
                         "transcript": " ".join(w["w"] for w in words[a_:b_ + 1]), "style": style_used,
                         "reframe": info["reframe"], "watermark": info["watermark"],
+                        "money_shot": info.get("money_shot"),
                         **({"edits": edit_report, "edl": f"{name}.edl.json"} if edit_report else {})})
     return results
 
@@ -95,7 +107,7 @@ def write_outputs(out, meta, doc, results, schedule=None, every_hours=24):
 def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DEFAULT_CACHE, model="small",
          language=None, reframe="auto", use_llm=True, fresh=False, preset="medium", schedule=None,
          every_hours=24, keep_ass=False, watermark=None, edits=None, exclude=None, avoid_previous=False,
-         select_only=False):
+         select_only=False, money_shot=None):
     t0 = time.time()
     out = Path(out).expanduser().resolve(); out.mkdir(parents=True, exist_ok=True)
     cache = Path(cache).expanduser(); cache.mkdir(parents=True, exist_ok=True)
@@ -136,7 +148,8 @@ def make(source, out, count=5, min_len=30, max_len=60, style="hormozi", cache=DE
         prog("picks_ready", len(clips), len(clips), out_dir=str(out))
         log(f"picks ready -> {out / 'picks.json'}")
         return _picks_ready_doc(out, meta, total, timings)
-    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm, eo, cache, _tr_hash(tr))
+    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm, eo, cache, _tr_hash(tr),
+                           money_shot=money_shot)
     timings["render"] = time.time() - t0 - sum(timings.values())
     doc = {"tool": "shortrizz", "out_dir": str(out), "source": meta, "source_duration": round(total, 1),
            "settings": {"count": count, "min": min_len, "max": max_len, "style": style, "model": model,
@@ -178,7 +191,7 @@ def _edit_opts(cli):
     o["enabled"] = enabled if enabled is not None else True
     return o
 
-def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=None, edits=None):
+def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=None, edits=None, money_shot=None):
     """Re-render the clips of an earlier run with another caption style (no download/transcribe/LLM)."""
     t0 = time.time()
     run_dir = Path(run_dir).expanduser().resolve()
@@ -207,7 +220,8 @@ def restyle(run_dir, style, out=None, reframe=None, preset="medium", watermark=N
         if p.get("edl") and f.exists():
             prev_edls[i] = json.loads(f.read_text())
     results = render_clips(src, words, clips, out, style, reframe, preset, progress=prog, watermark=wm,
-                           edit_opts=eo, cache=cache, tr_hash=_tr_hash(tr), prev_edls=prev_edls)
+                           edit_opts=eo, cache=cache, tr_hash=_tr_hash(tr), prev_edls=prev_edls,
+                           money_shot=money_shot)
     doc = {**prev, "settings": {**prev["settings"], "style": style, "reframe": reframe,
                                                  "watermark": wm["watermark"], "edits": eo},
            "timings_sec": {"render": round(time.time() - t0, 1)}, "clips": results, "restyled_from": str(run_dir),
@@ -271,7 +285,7 @@ def _watermark_for(settings, override):
 
 
 def render_from_picks(picks_path, out=None, preset=None, watermark=None, edits=None, keep_ass=None,
-                      reframe=None, schedule=None, every_hours=24, expect_kind=None):
+                      reframe=None, schedule=None, every_hours=24, expect_kind=None, money_shot=None):
     """Render enabled picks in order. Trim, title and caption style on each pick are honoured."""
     path = Path(picks_path).expanduser().resolve()
     if not path.is_file():
@@ -289,13 +303,14 @@ def render_from_picks(picks_path, out=None, preset=None, watermark=None, edits=N
     out = Path(out).expanduser().resolve() if out else run
     out.mkdir(parents=True, exist_ok=True)
     if doc["kind"] == "highlights":
-        return _render_highlight_picks(doc, out, preset=preset, watermark=watermark, keep_ass=keep_ass)
+        return _render_highlight_picks(doc, out, preset=preset, watermark=watermark, keep_ass=keep_ass,
+                                       money_shot=money_shot)
     return _render_short_picks(doc, out, preset=preset, watermark=watermark, edits=edits, keep_ass=keep_ass,
-                               reframe=reframe, schedule=schedule, every_hours=every_hours)
+                               reframe=reframe, schedule=schedule, every_hours=every_hours, money_shot=money_shot)
 
 
 def _render_short_picks(doc, out, preset=None, watermark=None, edits=None, keep_ass=None,
-                        reframe=None, schedule=None, every_hours=24):
+                        reframe=None, schedule=None, every_hours=24, money_shot=None):
     t0 = time.time()
     settings = doc.get("settings") or {}
     source = doc["source"]
@@ -325,7 +340,8 @@ def _render_short_picks(doc, out, preset=None, watermark=None, edits=None, keep_
         clips = picks.clips_for_render(doc, words)
     except ValueError as e:
         raise SystemExit(str(e))
-    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm, eo, cache, _tr_hash(tr))
+    results = render_clips(src, words, clips, out, style, reframe, preset, keep_ass, prog, wm, eo, cache, _tr_hash(tr),
+                           money_shot=money_shot)
     total = source.get("duration") or ffprobe_duration(src)
     finished = {"tool": "shortrizz", "out_dir": str(out), "source": meta, "source_duration": round(float(total), 1),
                 "settings": {"count": settings.get("count"), "min": settings.get("min"), "max": settings.get("max"),
@@ -338,7 +354,7 @@ def _render_short_picks(doc, out, preset=None, watermark=None, edits=None, keep_
     return finished
 
 
-def _render_highlight_picks(doc, out, preset=None, watermark=None, keep_ass=None):
+def _render_highlight_picks(doc, out, preset=None, watermark=None, keep_ass=None, money_shot=None):
     t0 = time.time()
     settings = doc.get("settings") or {}
     source = doc["source"]
@@ -376,9 +392,9 @@ def _render_highlight_picks(doc, out, preset=None, watermark=None, keep_ass=None
     dest = out / "highlights.mp4"
     info = HL.render_highlights(src, clips, dest, words=words, style=look, crossfade=crossfade,
                                 loudnorm=loudnorm, preset=preset, crf=crf, max_width=max_width,
-                                watermark=wm, keep_ass=keep_ass, progress=prog)
+                                watermark=wm, keep_ass=keep_ass, progress=prog, money_shot=money_shot)
     try:
-        render.thumbnail(dest, out / "highlights.jpg", min(1.5, info["duration"] / 2))
+        render.thumbnail(dest, out / "highlights.jpg", _thumb_at(info, min(1.5, info["duration"] / 2)))
     except Exception as e:
         log(f"thumbnail skipped ({e})")
     results = []
@@ -388,7 +404,8 @@ def _render_highlight_picks(doc, out, preset=None, watermark=None, keep_ass=None
                         "file": dest.name, "duration": meta_seg["duration"],
                         "out_start": meta_seg["out_start"], "out_end": meta_seg["out_end"],
                         "transcript": seg.get("transcript", ""),
-                        "style": seg.get("caption_style")})
+                        "style": seg.get("caption_style"),
+                        "money_shot": info.get("money_shot")})
     for seg in results:
         seg["hashtags"] = seg.get("hashtags") or []
     ch_name = "chapters.txt" if chapters else None
@@ -458,7 +475,7 @@ def highlights(source, out, target=180, max_clips=8, min_score=50, min_len=15, m
                crossfade=0.4, captions=True, style="hormozi", cache=DEFAULT_CACHE, model="small", language=None,
                use_llm=True, fresh=False, preset="medium", watermark=None, loudnorm=True, chapters=True,
                manifest=True, max_width=1920, exclude=None, avoid_previous=False, keep_ass=False, crf=20,
-               select_only=False):
+               select_only=False, money_shot=None):
     """One 16:9 highlights reel from the same scored moments the shorts pipeline uses."""
     if order not in ("chrono", "score"):
         raise SystemExit("order must be chrono or score")
@@ -519,10 +536,10 @@ def highlights(source, out, target=180, max_clips=8, min_score=50, min_len=15, m
     dest = out / "highlights.mp4"
     info = HL.render_highlights(src, clips, dest, words=words, style=look, crossfade=crossfade,
                                 loudnorm=loudnorm, preset=preset, crf=crf, max_width=max_width,
-                                watermark=wm, keep_ass=keep_ass, progress=prog)
+                                watermark=wm, keep_ass=keep_ass, progress=prog, money_shot=money_shot)
     timings["render"] = time.time() - t0 - sum(timings.values())
     try:
-        render.thumbnail(dest, out / "highlights.jpg", min(1.5, info["duration"] / 2))
+        render.thumbnail(dest, out / "highlights.jpg", _thumb_at(info, min(1.5, info["duration"] / 2)))
     except Exception as e:
         log(f"thumbnail skipped ({e})")
     results = []
@@ -530,6 +547,7 @@ def highlights(source, out, target=180, max_clips=8, min_score=50, min_len=15, m
         results.append({**{k: seg.get(k) for k in ("start", "end", "title", "virality_score", "why_it_hooks",
                                                     "caption", "hashtags", "method", "word_range")},
                         "file": dest.name, "duration": meta_seg["duration"],
+                        "money_shot": info.get("money_shot"),
                         "out_start": meta_seg["out_start"], "out_end": meta_seg["out_end"],
                         "transcript": seg.get("transcript", "")})
     for seg in results:

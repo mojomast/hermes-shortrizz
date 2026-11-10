@@ -67,6 +67,8 @@ A failed still leaves `still` as `null` and does not fail selection.
 | `hashtags` | string[] | Suggested tags. |
 | `method` | string | How the pick was chosen (`llm`, `heuristic`, …). |
 | `word_range` | `[int, int]` or null | Inclusive word indexes into the transcript. A render keeps them when the trim still covers those words. A trim that cuts into the words drops the words that fall outside. |
+| `hero` | bool, optional | `true` makes this segment the money-shot shot. The strongest frame inside it is frame 0. Omitted means the scorer decides. |
+| `hero_time` | number, optional | Source seconds of the frame that must be frame 0. Outranks `hero`. Omitted means the scorer decides. |
 
 ## Render rules
 

@@ -292,6 +292,14 @@ def clips_for_render(doc, words):
             "word_start": round(words[a]["s"], 3),
             "word_end": round(words[b]["e"], 3),
         })
+        if p.get("hero") is True:
+            chosen[-1]["hero"] = True
+        hero_time = p.get("hero_time")
+        if hero_time is not None:
+            try:
+                chosen[-1]["hero_time"] = float(hero_time)
+            except (TypeError, ValueError):
+                pass
     if not chosen:
         raise ValueError("no enabled picks to render")
     return chosen
